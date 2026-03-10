@@ -1,0 +1,8 @@
+{
+  "name": "ocas-weave",
+  "version": "1.1.0",
+  "description": "Private provenance-backed social graph. Use when the user wants to store, query, or reason about people, relationships, preferences, and shared experiences. Trigger phrases: 'remember that Alex likes natural wine', 'who do we know in Tokyo', 'summarize what matters about this person before dinner', 'what gift ideas fit Shannon'. Do not use for web research (Sift), OSINT investigations (Scout), or CRM automation.",
+  "author": "Indigo Karasu",
+  "email": "mx.indigo.karasu@gmail.com",
+  "skill_type": "system"
+}

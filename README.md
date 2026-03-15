@@ -1,17 +1,36 @@
-# Weave
+# 🔗 weave
 
-Private provenance-backed social graph. Maintains queryable records of people, relationships, preferences, and experiences for recall, gifting, hosting, introductions, and serendipity.
+Integration and orchestration layer. Connects disparate systems and coordinates seamless data flow.
 
-## Repository Structure
+---
 
-- `ocas-weave/` - Skill package source
-- `spec/` - Specification and build documentation
+## 📖 Overview
 
-## Installation
+Weave handles core responsibilities in the Indigo system. See SKILL.md for operational details.
 
-This skill package is available on GitHub. To use it, clone this repository and follow the installation instructions in your skill management system.
+---
 
+## 🚀 Quick Start
 
-## License
+### 📦 Installation
+
+Clone into your skill management system:
+```bash
+git clone https://github.com/indigokarasu/weave.git
+```
+
+### 🛠️ Configuration
+
+Read `SKILL.md` for:
+- ⚙️ Operational behavior
+- 🔗 Skill cooperation
+- 📋 Tool surface
+- 🔒 Privacy and data handling
+
+Read `references/` for detailed schemas, heuristics, and examples.
+
+---
+
+## 📄 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.

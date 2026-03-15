@@ -1,6 +1,6 @@
 # 🔗 Weave
 
-Weave maintains the suite's private social graph—people, relationships, preferences, and shared experiences. Every relationship and preference has provenance. Weave surfaces social context without ever sharing data externally. It answers relationship questions, surfaces shared interests, and tracks experience history across the system.
+Weave maintains the suite's private social graph—people, relationships, preferences, and shared experiences. Every relationship and preference has provenance. Weave surfaces social context without ever sharing data externally. It answers relationship questions, surfaces shared interests, and tracks experience history across the suite.
 
 ---
 
@@ -24,7 +24,7 @@ Private provenance-backed social graph. Maintains queryable records of people, r
 
 ## 📊 Output & Journals
 
-Produces: Maintains person records, relationship records with provenance, and preference logs.
+Person records, relationship records with provenance, and preference logs.
 
 ---
 

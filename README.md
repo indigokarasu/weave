@@ -1,12 +1,12 @@
-# 🔗 weave
+# weave
 
-Integration and orchestration layer. Connects disparate systems and coordinates seamless data flow.
+🔗 Integration and orchestration layer. Connects disparate systems and coordinates seamless data flow.
 
 ---
 
 ## 📖 Overview
 
-Weave handles core responsibilities in the Indigo system. See SKILL.md for operational details.
+Uweave handles core responsibilities in the Indigo system. See SKILL.md for operational details.
 
 ---
 

@@ -1,12 +1,12 @@
 # 🔗 weave
 
-Integration and orchestration layer. Connects disparate systems and coordinates seamless data flow.
+Private provenance-backed social graph. Maintains queryable records of people, relationships, preferences, and experiences.
 
 ---
 
 ## 📖 Overview
 
-Weave orchestrates integration between systems. Manages system connections, data routing, and cross-system coordination.
+Weave is a core component of the Indigo system. See SKILL.md for operational details.
 
 ---
 
@@ -18,28 +18,15 @@ Weave orchestrates integration between systems. Manages system connections, data
 git clone https://github.com/indigokarasu/weave.git
 ```
 
-### 🛠️ Tool Surface
+### 🛠️ Configuration
 
-```
-weave.connect_system(name, config)   🔌 Register system connection
-weave.route_data(source, dest, ...)  📤 Route data between systems
-weave.list_connections()             🔗 List active connections
-weave.integration_status()           ✓ Check integration health
-weave.execute_workflow(...)          ⚙️ Execute cross-system workflow
-```
+Read `SKILL.md` for:
+- ⚙️ Operational behavior
+- 🔗 Skill cooperation
+- 📋 Tool surface
+- 🔒 Privacy and data handling
 
-### 📤 Output
-
-- **weave_integration_log** — System connection and data flow events
-- **weave_workflow_summary** — Orchestration results and status
-
----
-
-## ⚙️ Configuration
-
-Read `SKILL.md` for operational details, integration patterns, and cooperation with other skills.
-
-Read `references/` for schemas and examples.
+Read `references/` for detailed schemas, heuristics, and examples.
 
 ---
 

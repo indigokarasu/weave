@@ -1,32 +1,42 @@
-# 🔗 weave
+# 🔗 Weave
 
-Private provenance-backed social graph. Maintains queryable records of people, relationships, preferences, and experiences.
+Weave maintains the suite's private social graph—people, relationships, preferences, and shared experiences. Every relationship and preference has provenance. Weave surfaces social context without ever sharing data externally. It answers relationship questions, surfaces shared interests, and tracks experience history across the system.
 
 ---
 
 ## 📖 Overview
 
-Weave is a core component of the Indigo system. See SKILL.md for operational details.
+Private provenance-backed social graph. Maintains queryable records of people, relationships, preferences, and experiences.
 
 ---
 
-## 🚀 Quick Start
+## 🔧 Tool Surface
 
-### 📦 Installation
+- `weave.person.add` — add person to social graph
+- `weave.person.profile` — get person profile with relationships and preferences
+- `weave.relationship.add` — record relationship between people
+- `weave.relationship.strength` — estimate relationship strength from signals
+- `weave.preference.record` — record person preference with context
+- `weave.query` — query social graph (shared interests, connections, history)
+- `weave.status` — node count, relationship count, query statistics
 
-```bash
-git clone https://github.com/indigokarasu/weave.git
-```
+---
 
-### 🛠️ Configuration
+## 📊 Output & Journals
 
-Read `SKILL.md` for:
-- ⚙️ Operational behavior
-- 🔗 Skill cooperation
-- 📋 Tool surface
-- 🔒 Privacy and data handling
+Produces: Maintains person records, relationship records with provenance, and preference logs.
 
-Read `references/` for detailed schemas, heuristics, and examples.
+---
+
+
+
+---
+
+## 📚 Documentation
+
+Read `SKILL.md` for operational details, schemas, and validation rules.
+
+See `references/` for detailed specifications and examples.
 
 ---
 

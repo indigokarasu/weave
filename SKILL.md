@@ -37,6 +37,11 @@ Weave does not own: general world knowledge (Elephas/Chronicle), OSINT research 
 Weave is a standalone database. It does not write to Chronicle and has no runtime dependency on Chronicle. If a person in Weave also exists in Chronicle, Chronicle may store a `weave:person_id` reference on its Entity node. That is Chronicle's concern, not Weave's.
 
 
+
+## Functions
+
+
+
 ## Storage layout
 
 ```

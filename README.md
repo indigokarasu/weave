@@ -1,40 +1,63 @@
 # 🕸️ Weave
 
-Private provenance-backed social graph using LadybugDB.
-
-**Skill name:** `ocas-weave`
-**Version:** 2.2.0
-**Type:** system
-**Layer:** Memory
-**Author:** Indigo Karasu
+Weave maintains a private, provenance-backed social graph of people, relationships, preferences, and shared experiences -- queryable for meeting prep, gift ideas, hosting, introductions, city connections, and serendipity discovery. Every stored fact carries source type, reference, timestamp, and confidence score; the graph never silently merges two person records and never writes back to external systems without explicit per-sync approval.
 
 ---
 
-## Files
+## Overview
 
-| File | Purpose |
+Weave maintains a private social graph where every stored fact carries provenance -- source type, reference, timestamp, and confidence score. It is designed for the kind of knowledge that matters in relationships: who someone is, how they connect to others, what they like, what experiences you have shared. Queries support meeting prep, gift ideas, hosting context, city connections, and serendipity discovery across the graph. The database never silently merges two person records, never writes back to external systems without explicit per-sync approval, and uses only Cypher for all graph operations. The underlying database (LadybugDB) initializes automatically at `~/openclaw/db/ocas-weave/weave.lbug`.
+
+## Commands
+
+| Command | Description |
 |---|---|
-| `skill.json` | Package metadata and routing description |
-| `SKILL.md` | Operational instructions for the agent |
-| `references/` | Support files referenced by SKILL.md |
+| `weave.upsert.person` | Add or update a person record |
+| `weave.upsert.relationship` | Add or update a Knows edge between two people |
+| `weave.upsert.preference` | Store a provenance-backed preference for a person |
+| `weave.import.csv` | Bulk import contacts via COPY FROM |
+| `weave.query` | Query the graph (lookup, connection, serendipity, city, summarize, gift modes) |
+| `weave.attach` | Query an external skill database read-only |
+| `weave.export` | Export data to staging directory via COPY TO |
+| `weave.sync.google-contacts` | Bidirectional sync with Google Contacts |
+| `weave.sync.clay` | Bidirectional sync with Clay |
+| `weave.project.vcard` | Generate vCard 4.0 draft |
+| `weave.writeback.contacts` | Push records to Google Contacts or Clay (disabled by default) |
+| `weave.init` | Diagnostic and repair: checks schema, creates missing tables |
+| `weave.status` | Graph health and config state |
+| `weave.journal` | Write journal for the current run |
 
----
+## Setup
+
+`weave.init` runs automatically on first invocation and creates all required directories, config.json, and the LadybugDB database. No manual setup is required. Weave is purely reactive -- no scheduled tasks.
+
+## Dependencies
+
+**OCAS Skills**
+- [Elephas](https://github.com/indigokarasu/elephas) -- Chronicle enrichment read-only
+- [Scout](https://github.com/indigokarasu/scout) -- OSINT findings as upsert candidates
+- [Dispatch](https://github.com/indigokarasu/dispatch) -- social context for communication drafting
+
+**External**
+- LadybugDB -- embedded single-file graph database (auto-created at `~/openclaw/db/ocas-weave/weave.lbug`)
+- Google Contacts (optional bidirectional sync)
+- Clay (optional bidirectional sync -- Clay is enrichment source, Weave provenance wins conflicts)
+
+## Scheduled Tasks
+
+This skill is purely reactive. No scheduled tasks.
 
 ## Changelog
 
-### 2.2.0 (2026-03-22)
+### v2.2.0 -- March 22, 2026
+- Routing improvements
 
-- Added short-name routing aliases to skill.json description and SKILL.md frontmatter for natural invocation ('Scout', 'Sift', etc.)
-- Added trigger phrases to descriptions for improved routing accuracy
-- Cross-skill references in descriptions now use 'use X' format for routing clarity
+### v2.1.0 -- March 22, 2026
+- Mandatory journal entries at end of every run
+- Standardized path usage across all commands
 
-### 2.1.0 (2026-03-22)
+### v2.0.0 -- March 18, 2026
+- Initial release as part of the unified OCAS skill suite
+---
 
-- Added Run completion section with explicit journal write for every command
-- Added Initialization section documenting auto-init behavior
-- Removed non-conformant OCAS_ROOT environment variable reference from prose and Python code
-- Fixed Python code to use literal ~/openclaw/ path
-
-### 2.0.0 (2026-03-18)
-
-- Initial build of all OCAS skills as a unified suite
+*Weave is part of the [OpenClaw Agent Suite](https://github.com/indigokarasu) -- a collection of interconnected skills for personal intelligence, autonomous research, and continuous self-improvement. Each skill owns a narrow responsibility and communicates with others through structured signal files, shared journals, and Chronicle, a long-term knowledge graph that accumulates verified facts over time.*

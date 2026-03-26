@@ -1,12 +1,14 @@
 ---
 name: ocas-weave
-description: Weave: private provenance-backed social graph. Maintains queryable records of people, relationships, preferences, and shared experiences for recall, gifting, hosting, introductions, and serendipity. Trigger phrases: 'who do I know in', 'what does X like', 'add this person', 'relationship with', 'gift ideas for', 'sync contacts', 'prepare for meeting with'. Use when storing or retrieving facts about a person, recording a relationship, or discovering connections between people.
+source: https://github.com/indigokarasu/weave
+install: openclaw skill install https://github.com/indigokarasu/weave
+description: Use when storing or retrieving facts about people, recording relationships, preparing for meetings, finding gift ideas, discovering connections between people, or syncing contacts. Maintains a private provenance-backed social graph (LadybugDB). Trigger phrases: 'who do I know in', 'what does X like', 'add this person', 'relationship with', 'gift ideas for', 'sync contacts', 'prepare for meeting with'. Do not use for OSINT investigations (use Scout) or general web research (use Sift).
 metadata: {"openclaw":{"emoji":"🕸️"}}
 ---
 
 # Weave
 
-Weave maintains a private, provenance-backed social graph using LadybugDB. All queries use Cypher. No SQL. The database initializes automatically on first use — no manual setup required.
+Weave maintains a private, provenance-backed social graph of people, relationships, preferences, and shared experiences — queryable for meeting prep, gift ideas, hosting, introductions, city connections, and serendipity discovery. Every stored fact carries source type, reference, timestamp, and confidence score; the graph never silently merges two person records and never writes back to external systems without explicit per-sync approval. All queries use Cypher — no SQL. The database initializes automatically on first use.
 
 
 ## When to use
@@ -35,11 +37,6 @@ Weave owns the private social graph: people, relationships, preferences, and sha
 Weave does not own: general world knowledge (Elephas/Chronicle), OSINT research (Scout), web research (Sift), task management (Triage).
 
 Weave is a standalone database. It does not write to Chronicle and has no runtime dependency on Chronicle. If a person in Weave also exists in Chronicle, Chronicle may store a `weave:person_id` reference on its Entity node. That is Chronicle's concern, not Weave's.
-
-
-
-## Functions
-
 
 
 ## Storage layout
@@ -90,34 +87,7 @@ Multiple `READ_ONLY` connections are safe simultaneously. `COPY FROM` is for bul
 
 Every command that opens the database runs `_ensure_init()` first. No manual init command is needed on first use.
 
-```python
-import real_ladybug as lb
-from pathlib import Path
-
-
-ROOT = Path("~/openclaw").expanduser()
-DB_PATH = ROOT / "db/ocas-weave/weave.lbug"
-STAGING = ROOT / "db/ocas-weave/staging"
-JOURNALS = ROOT / "journals/ocas-weave"
-
-def _open_db(read_only=False):
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STAGING.mkdir(parents=True, exist_ok=True)
-    db = lb.Database(str(DB_PATH), read_only=read_only)
-    conn = lb.Connection(db)
-    if not read_only:
-        _ensure_init(conn)
-    return db, conn
-
-def _ensure_init(conn):
-    tables = {row[0] for row in conn.execute("CALL show_tables() RETURN *")}
-    if "Person" not in tables:
-        _run_ddl(conn)
-
-def _run_ddl(conn):
-    # Full DDL from references/schemas.md
-    pass  # See references/schemas.md for complete DDL
-```
+Read `references/init_pattern.md` for the `_open_db` implementation pattern. Full DDL is in `references/schemas.md`.
 
 
 ## Commands
@@ -246,13 +216,15 @@ Weave is purely reactive. No cron jobs or heartbeat entries.
 public
 
 
-## Reference file map
+## Support file map
 
-File | When to read
-`references/schemas.md` | Before any DDL, upsert, or import; before weave.init
-`references/query_patterns.md` | Before any weave.query call
-`references/import_export.md` | Before any COPY FROM or COPY TO operation
-`references/cross_db.md` | Before any weave.attach call or Chronicle enrichment query
-`references/connectors.md` | Before any sync with Google Contacts or Clay
-`references/vcard_projection.md` | Before weave.project.vcard
-`references/journal.md` | Before weave.journal; at end of every run
+| File | When to read |
+|---|---|
+| `references/schemas.md` | Before any DDL, upsert, or import; before weave.init |
+| `references/init_pattern.md` | When implementing _open_db or troubleshooting initialization |
+| `references/query_patterns.md` | Before any weave.query call |
+| `references/import_export.md` | Before any COPY FROM or COPY TO operation |
+| `references/cross_db.md` | Before any weave.attach call or Chronicle enrichment query |
+| `references/connectors.md` | Before any sync with Google Contacts or Clay |
+| `references/vcard_projection.md` | Before weave.project.vcard |
+| `references/journal.md` | Before weave.journal; at end of every run |

@@ -128,6 +128,8 @@ CALL show_warnings() RETURN *;
 
 **weave.journal** -- Write journal for the current run. Read `references/journal.md`. Called at end of every run. Journals are immutable after write.
 
+**weave.update** -- Pull latest skill package from GitHub source. Preserves journals and data.
+
 
 ## Run completion
 
@@ -206,9 +208,39 @@ On first invocation of any Weave command, `_open_db()` handles auto-initializati
 2. Write default `config.json` with ConfigBase fields if absent
 3. Create `~/openclaw/journals/ocas-weave/`
 4. Open database (auto-creates `weave.lbug` and runs DDL if tables absent)
-5. Log initialization as a DecisionRecord
+5. Register cron job `weave:update` if not already present (check `openclaw cron list` first)
+6. Log initialization as a DecisionRecord
 
-Weave is purely reactive. No cron jobs or heartbeat entries.
+## Background tasks
+
+| Job name | Mechanism | Schedule | Command |
+|---|---|---|---|
+| `weave:update` | cron | `0 0 * * *` (midnight daily) | `weave.update` |
+
+```
+openclaw cron add --name weave:update --schedule "0 0 * * *" --command "weave.update" --sessionTarget isolated --lightContext true --timezone America/Los_Angeles
+```
+
+
+## Self-update
+
+`weave.update` pulls the latest package from the `source:` URL in this file's frontmatter. Runs silently — no output unless the version changed or an error occurred.
+
+1. Read `source:` from frontmatter → extract `{owner}/{repo}` from URL
+2. Read local version from `skill.json`
+3. Fetch remote version: `gh api "repos/{owner}/{repo}/contents/skill.json" --jq '.content' | base64 -d | python3 -c "import sys,json;print(json.load(sys.stdin)['version'])"`
+4. If remote version equals local version → stop silently
+5. Download and install:
+   ```bash
+   TMPDIR=$(mktemp -d)
+   gh api "repos/{owner}/{repo}/tarball/main" > "$TMPDIR/archive.tar.gz"
+   mkdir "$TMPDIR/extracted"
+   tar xzf "$TMPDIR/archive.tar.gz" -C "$TMPDIR/extracted" --strip-components=1
+   cp -R "$TMPDIR/extracted/"* ./
+   rm -rf "$TMPDIR"
+   ```
+6. On failure → retry once. If second attempt fails, report the error and stop.
+7. Output exactly: `I updated Weave from version {old} to {new}`
 
 
 ## Visibility

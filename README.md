@@ -26,10 +26,11 @@ Weave maintains a private social graph where every stored fact carries provenanc
 | `weave.init` | Diagnostic and repair: checks schema, creates missing tables |
 | `weave.status` | Graph health and config state |
 | `weave.journal` | Write journal for the current run |
+| `weave.update` | Pull latest from GitHub source (preserves journals and data) |
 
 ## Setup
 
-`weave.init` runs automatically on first invocation and creates all required directories, config.json, and the LadybugDB database. No manual setup is required. Weave is purely reactive -- no scheduled tasks.
+`weave.init` runs automatically on first invocation and creates all required directories, config.json, and the LadybugDB database. No manual setup is required. It also registers the `weave:update` cron job (midnight daily) for automatic self-updates.
 
 ## Dependencies
 
@@ -45,9 +46,14 @@ Weave maintains a private social graph where every stored fact carries provenanc
 
 ## Scheduled Tasks
 
-This skill is purely reactive. No scheduled tasks.
+| Job | Mechanism | Schedule | Command |
+|---|---|---|---|
+| `weave:update` | cron | `0 0 * * *` (midnight daily) | Self-update from GitHub source |
 
 ## Changelog
+
+### v2.2.1 -- March 27, 2026
+- Added `weave.update` command and midnight cron for automatic version-checked self-updates
 
 ### v2.2.0 -- March 22, 2026
 - Routing improvements

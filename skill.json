@@ -32,5 +32,23 @@
       "~/openclaw/journals/ocas-weave/",
       "~/openclaw/db/ocas-weave/"
     ]
-  }
+  },
+  "self_update": {
+    "source": "https://github.com/indigokarasu/weave",
+    "mechanism": "version-checked tarball from GitHub via gh CLI",
+    "command": "weave.update",
+    "requires_binaries": [
+      "gh",
+      "tar",
+      "python3"
+    ]
+  },
+  "scheduled_tasks": [
+    {
+      "name": "weave:update",
+      "schedule": "0 0 * * *",
+      "command": "weave.update",
+      "description": "Self-update from GitHub source"
+    }
+  ]
 }

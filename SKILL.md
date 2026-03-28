@@ -2,7 +2,7 @@
 name: ocas-weave
 source: https://github.com/indigokarasu/weave
 install: openclaw skill install https://github.com/indigokarasu/weave
-description: Use when storing or retrieving facts about people, recording relationships, preparing for meetings, finding gift ideas, discovering connections between people, or syncing contacts. Maintains a private provenance-backed social graph (LadybugDB). Trigger phrases: 'who do I know in', 'what does X like', 'add this person', 'relationship with', 'gift ideas for', 'sync contacts', 'prepare for meeting with'. Do not use for OSINT investigations (use Scout) or general web research (use Sift).
+description: Use when storing or retrieving facts about people, recording relationships, preparing for meetings, finding gift ideas, discovering connections between people, or syncing contacts. Maintains a private provenance-backed social graph (LadybugDB). Trigger phrases: 'who do I know in', 'what does X like', 'add this person', 'relationship with', 'gift ideas for', 'sync contacts', 'prepare for meeting with', 'update weave'. Do not use for OSINT investigations (use Scout) or general web research (use Sift).
 metadata: {"openclaw":{"emoji":"🕸️"}}
 ---
 

@@ -28,13 +28,12 @@ Two Database objects pointing to different files never conflict — the lock is 
 ```python
 import real_ladybug as lb
 from pathlib import Path
-import os
 
-OCAS_ROOT = Path(os.environ.get("OCAS_ROOT", "~/openclaw")).expanduser()
+OCAS_BASE = Path("~/openclaw").expanduser()
 
 def query_external_db(skill_name: str, cypher: str, params: dict = None):
     """Open an external lbug READ_ONLY and execute a query. Releases lock immediately."""
-    db_path = OCAS_ROOT / f"db/{skill_name}/{skill_name.split('-', 1)[-1]}.lbug"
+    db_path = OCAS_BASE / f"db/{skill_name}/{skill_name.split('-', 1)[-1]}.lbug"
     db = lb.Database(str(db_path), read_only=True)
     conn = lb.Connection(db)
     rows = list(conn.execute(cypher, params or {}))

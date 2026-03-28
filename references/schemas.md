@@ -78,14 +78,14 @@ Note: LadybugDB does not support `CREATE INDEX IF NOT EXISTS` syntax. Primary ke
 ```python
 import real_ladybug as lb
 from pathlib import Path
-import os, uuid, json
+import uuid, json
 from datetime import datetime, timezone
 
-OCAS_ROOT = Path(os.environ.get("OCAS_ROOT", "~/openclaw")).expanduser()
-DB_PATH = OCAS_ROOT / "db/ocas-weave/weave.lbug"
-STAGING = OCAS_ROOT / "db/ocas-weave/staging"
-JOURNALS = OCAS_ROOT / "journals/ocas-weave"
-CONFIG_PATH = OCAS_ROOT / "db/ocas-weave/config.json"
+OCAS_BASE = Path("~/openclaw").expanduser()
+DB_PATH = OCAS_BASE / "db/ocas-weave/weave.lbug"
+STAGING = OCAS_BASE / "db/ocas-weave/staging"
+JOURNALS = OCAS_BASE / "journals/ocas-weave"
+CONFIG_PATH = OCAS_BASE / "db/ocas-weave/config.json"
 
 def _open_db(read_only=False):
     """Open connection. Auto-inits schema and directories on first use."""

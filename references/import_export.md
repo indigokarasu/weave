@@ -63,10 +63,8 @@ Run before every `COPY FROM` on external data. Adds missing required columns.
 import csv, uuid
 from datetime import datetime, timezone
 from pathlib import Path
-import os
 
-OCAS_ROOT = Path(os.environ.get("OCAS_ROOT", "~/openclaw")).expanduser()
-STAGING = OCAS_ROOT / "db/ocas-weave/staging"
+STAGING = Path("~/openclaw/db/ocas-weave/staging").expanduser()
 
 def prep_import_csv(input_path, output_filename, source_ref):
     now = datetime.now(timezone.utc).isoformat()

@@ -35,11 +35,9 @@ Inbound sync:
 import real_ladybug as lb, uuid
 from datetime import datetime, timezone
 from googleapiclient.discovery import build
-import os
 from pathlib import Path
 
-OCAS_ROOT = Path(os.environ.get("OCAS_ROOT", "~/openclaw")).expanduser()
-DB_PATH = OCAS_ROOT / "db/ocas-weave/weave.lbug"
+DB_PATH = Path("~/openclaw/db/ocas-weave/weave.lbug").expanduser()
 
 def sync_inbound_google(db, creds):
     conn = lb.Connection(db)

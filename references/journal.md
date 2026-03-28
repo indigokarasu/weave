@@ -86,10 +86,8 @@ For sync/writeback runs, change journal_type to `"action"` and set `action.side_
 import json, uuid
 from datetime import datetime, timezone
 from pathlib import Path
-import os
 
-OCAS_ROOT = Path(os.environ.get("OCAS_ROOT", "~/openclaw")).expanduser()
-JOURNALS = OCAS_ROOT / "journals/ocas-weave"
+JOURNALS = Path("~/openclaw/journals/ocas-weave").expanduser()
 
 def start_run():
     return {

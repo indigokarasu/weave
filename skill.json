@@ -1,6 +1,6 @@
 {
   "name": "ocas-weave",
-  "version": "2.3.2",
+  "version": "2.4.0",
   "description": "Weave: private provenance-backed social graph. Maintains queryable records of people, relationships, preferences, and shared experiences for recall, gifting, hosting, introductions, and serendipity. Trigger phrases: 'who do I know in', 'what does X like', 'add this person', 'relationship with', 'gift ideas for', 'sync contacts', 'prepare for meeting with', 'update weave'. Use when storing or retrieving facts about a person, recording a relationship, or discovering connections between people.",
   "author": "Indigo Karasu",
   "email": "mx.indigo.karasu@gmail.com",

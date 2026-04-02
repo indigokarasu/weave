@@ -44,7 +44,9 @@ Weave works with these types from `spec-ocas-ontology.md`:
 
 - **Entity/Person** — people in the social graph. Weave extracts and manages Person entities exclusively.
 
-Weave may optionally emit Signals to Elephas for Person nodes with high-confidence identity markers, but this is not required for normal operation. Weave does not emit other entity types.
+Weave may optionally emit Signals to Elephas for Person nodes with high-confidence identity markers, but this is not required for normal operation.
+
+Each Signal emitted to Elephas must include a `user_relevance` field: `user` if the entity is directly related to the user's world, `agent_only` if encountered incidentally, `unknown` if unclear. Weave entities are almost always `user`-relevant since they represent the user's actual social connections.
 
 ## Storage layout
 
@@ -197,6 +199,7 @@ skill_okrs:
 ## Optional skill cooperation
 
 - Elephas — read Chronicle read-only for entity enrichment (optional, degrades gracefully if absent)
+- Elephas — journal entity observations consumed during Chronicle ingestion
 - Scout — receive OSINT findings about people as upsert candidates
 - Dispatch — provide social graph context for communication drafting
 
@@ -205,6 +208,14 @@ skill_okrs:
 
 - Observation Journal — query runs, upsert runs, import runs
 - Action Journal — sync runs, writeback runs
+
+When entities are encountered during a run, journals should include the following fields in `decision.payload`:
+
+- `entities_observed` — list of entities encountered (Entity/Person primarily; also places where interactions happen). Each entry includes type, name/identifier, and a `user_relevance` field (`user`, `agent_only`, or `unknown`).
+- `relationships_observed` — list of relationships between entities encountered during the run.
+- `preferences_observed` — list of preferences linked to entities encountered during the run.
+
+All entity observations must include a `user_relevance` field: `user` if the entity is directly related to the user's world, `agent_only` if encountered incidentally, `unknown` if unclear. Weave entities default to `user` since they represent the user's actual social connections.
 
 
 ## Initialization

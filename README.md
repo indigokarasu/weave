@@ -52,6 +52,11 @@ Weave maintains a private social graph where every stored fact carries provenanc
 
 ## Changelog
 
+### v2.4.0 -- April 2, 2026
+- Structured entity observations in journal payloads (`entities_observed`, `relationships_observed`, `preferences_observed`)
+- `user_relevance` tagging on journal observations and optional signal emission (default `user` for social graph entities)
+- Elephas journal cooperation in skill cooperation section
+
 ### v2.3.0 -- March 27, 2026
 - Added `weave.update` command and midnight cron for automatic version-checked self-updates
 

@@ -278,3 +278,13 @@ public
 | `references/connectors.md` | Before any sync with Google Contacts or Clay |
 | `references/vcard_projection.md` | Before weave.project.vcard |
 | `references/journal.md` | Before weave.journal; at end of every run |
+
+## Update command
+
+This skill self-updates every 24 hours via:
+
+```bash
+openclaw weave.update
+```
+
+This pulls the latest version from GitHub and restarts the skill's background tasks if applicable.

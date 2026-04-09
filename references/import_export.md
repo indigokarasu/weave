@@ -2,24 +2,24 @@
 
 Use `COPY FROM` for bulk import and `COPY TO` for export. Never substitute looped `MERGE` for bulk operations.
 
-Staging directory: `$OCAS_DATA_ROOT/db/ocas-weave/staging/` (auto-created on first use).
+Staging directory: `{agent_root}/commons/db/ocas-weave/staging/` (auto-created on first use).
 
 ## COPY FROM
 
 Basic:
 ```cypher
-COPY Person FROM '$OCAS_DATA_ROOT/db/ocas-weave/staging/contacts.csv' (header=true)
+COPY Person FROM '{agent_root}/commons/db/ocas-weave/staging/contacts.csv' (header=true)
 ```
 
 Partial columns (CSV has fewer columns than table):
 ```cypher
 COPY Person(id, name, email, source_type, source_ref, confidence, record_time)
-FROM '$OCAS_DATA_ROOT/db/ocas-weave/staging/partial.csv' (header=true)
+FROM '{agent_root}/commons/db/ocas-weave/staging/partial.csv' (header=true)
 ```
 
 With error skipping:
 ```cypher
-COPY Person FROM '$OCAS_DATA_ROOT/db/ocas-weave/staging/contacts.csv' (header=true, ignore_errors=true)
+COPY Person FROM '{agent_root}/commons/db/ocas-weave/staging/contacts.csv' (header=true, ignore_errors=true)
 ```
 
 After ignore_errors, always check then clear:
@@ -37,7 +37,7 @@ MATCH (p:Person) RETURN count(p) AS after;
 
 Relationship import:
 ```cypher
-COPY Knows FROM '$OCAS_DATA_ROOT/db/ocas-weave/staging/knows.csv' (from='Person', to='Person', header=true)
+COPY Knows FROM '{agent_root}/commons/db/ocas-weave/staging/knows.csv' (from='Person', to='Person', header=true)
 ```
 
 CSV must contain `from` and `to` columns with Person `id` values.
@@ -47,12 +47,12 @@ CSV must contain `from` and `to` columns with Person `id` values.
 Query results to CSV:
 ```cypher
 COPY (MATCH (p:Person) RETURN p.id, p.name, p.email, p.location_city)
-TO '$OCAS_DATA_ROOT/db/ocas-weave/staging/export_people.csv'
+TO '{agent_root}/commons/db/ocas-weave/staging/export_people.csv'
 ```
 
 To JSON:
 ```cypher
-COPY (MATCH (p:Person) RETURN p.*) TO '$OCAS_DATA_ROOT/db/ocas-weave/staging/export_people.json'
+COPY (MATCH (p:Person) RETURN p.*) TO '{agent_root}/commons/db/ocas-weave/staging/export_people.json'
 ```
 
 ## Pre-import CSV prep (Python)
@@ -64,7 +64,7 @@ import csv, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-STAGING = Path("$OCAS_DATA_ROOT/db/ocas-weave/staging").expanduser()
+STAGING = Path("{agent_root}/commons/db/ocas-weave/staging").expanduser()
 
 def prep_import_csv(input_path, output_filename, source_ref):
     now = datetime.now(timezone.utc).isoformat()
@@ -99,7 +99,7 @@ COPY (
   WHERE p.record_time > $last_sync_at AND p.google_resource_name IS NOT NULL
   RETURN p.id, p.name, p.name_given, p.name_family,
          p.email, p.phone, p.org, p.occupation, p.google_resource_name
-) TO '$OCAS_DATA_ROOT/db/ocas-weave/staging/outbound_google.csv'
+) TO '{agent_root}/commons/db/ocas-weave/staging/outbound_google.csv'
 ```
 
 Modified since last sync (Clay outbound):
@@ -108,5 +108,5 @@ COPY (
   MATCH (p:Person)
   WHERE p.record_time > $last_sync_at AND p.confidence >= 0.7 AND p.clay_id IS NOT NULL
   RETURN p.id, p.name, p.email, p.org, p.occupation, p.location_city, p.clay_id
-) TO '$OCAS_DATA_ROOT/db/ocas-weave/staging/outbound_clay.csv'
+) TO '{agent_root}/commons/db/ocas-weave/staging/outbound_clay.csv'
 ```

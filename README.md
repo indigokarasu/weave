@@ -9,7 +9,7 @@ Skill packages follow the [agentskills.io](https://agentskills.io/specification)
 
 ## Overview
 
-Weave maintains a private social graph where every stored fact carries provenance -- source type, reference, timestamp, and confidence score. It is designed for the kind of knowledge that matters in relationships: who someone is, how they connect to others, what they like, what experiences you have shared. Queries support meeting prep, gift ideas, hosting context, city connections, and serendipity discovery across the graph. The database never silently merges two person records, never writes back to external systems without explicit per-sync approval, and uses only Cypher for all graph operations. The underlying database (LadybugDB) initializes automatically at `$OCAS_DATA_ROOT/db/ocas-weave/weave.lbug`.
+Weave maintains a private social graph where every stored fact carries provenance -- source type, reference, timestamp, and confidence score. It is designed for the kind of knowledge that matters in relationships: who someone is, how they connect to others, what they like, what experiences you have shared. Queries support meeting prep, gift ideas, hosting context, city connections, and serendipity discovery across the graph. The database never silently merges two person records, never writes back to external systems without explicit per-sync approval, and uses only Cypher for all graph operations. The underlying database (LadybugDB) initializes automatically at `{agent_root}/commons/db/ocas-weave/weave.lbug`.
 
 ## Commands
 
@@ -43,7 +43,7 @@ Weave maintains a private social graph where every stored fact carries provenanc
 - [Dispatch](https://github.com/indigokarasu/dispatch) -- social context for communication drafting
 
 **External**
-- LadybugDB -- embedded single-file graph database (auto-created at `$OCAS_DATA_ROOT/db/ocas-weave/weave.lbug`)
+- LadybugDB -- embedded single-file graph database (auto-created at `{agent_root}/commons/db/ocas-weave/weave.lbug`)
 - Google Contacts (optional bidirectional sync)
 - Clay (optional bidirectional sync -- Clay is enrichment source, Weave provenance wins conflicts)
 

@@ -2,7 +2,7 @@
 
 Bidirectional sync for Google Contacts and Clay. Both connectors run within the same process as Weave, sharing the same Database object. Never open a connector as a separate READ_WRITE process while Weave has the database open.
 
-Sync state is stored in `$OCAS_DATA_ROOT/db/ocas-weave/config.json`.
+Sync state is stored in `{agent_root}/commons/db/ocas-weave/config.json`.
 
 ## Rules (both connectors)
 
@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 from googleapiclient.discovery import build
 from pathlib import Path
 
-DB_PATH = Path("$OCAS_DATA_ROOT/db/ocas-weave/weave.lbug").expanduser()
+DB_PATH = Path("{agent_root}/commons/db/ocas-weave/weave.lbug").expanduser()
 
 def sync_inbound_google(db, creds):
     conn = lb.Connection(db)

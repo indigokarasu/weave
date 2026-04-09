@@ -11,7 +11,7 @@ description: >
 metadata:
   author: Indigo Karasu
   email: mx.indigo.karasu@gmail.com
-  version: "2.5.0"
+  version: "2.5.1"
   hermes:
     tags: [social-graph, people, relationships]
     category: memory
@@ -24,14 +24,14 @@ metadata:
     visibility: public
     filesystem:
       read:
-        - "$OCAS_DATA_ROOT/data/ocas-weave/"
-        - "$OCAS_DATA_ROOT/journals/ocas-weave/"
-        - "$OCAS_DATA_ROOT/db/ocas-weave/"
-        - "$OCAS_DATA_ROOT/db/ocas-elephas/chronicle.lbug"
+        - "{agent_root}/commons/data/ocas-weave/"
+        - "{agent_root}/commons/journals/ocas-weave/"
+        - "{agent_root}/commons/db/ocas-weave/"
+        - "{agent_root}/commons/db/ocas-elephas/chronicle.lbug"
       write:
-        - "$OCAS_DATA_ROOT/data/ocas-weave/"
-        - "$OCAS_DATA_ROOT/journals/ocas-weave/"
-        - "$OCAS_DATA_ROOT/db/ocas-weave/"
+        - "{agent_root}/commons/data/ocas-weave/"
+        - "{agent_root}/commons/journals/ocas-weave/"
+        - "{agent_root}/commons/db/ocas-weave/"
     self_update:
       source: "https://github.com/indigokarasu/weave"
       mechanism: "version-checked tarball from GitHub via gh CLI"
@@ -96,12 +96,12 @@ Each Signal emitted to Elephas must include a `user_relevance` field: `user` if 
 ## Storage layout
 
 ```
-$OCAS_DATA_ROOT/db/ocas-weave/
+{agent_root}/commons/db/ocas-weave/
   weave.lbug          — LadybugDB database (auto-created on first use)
   config.json         — connector and sync configuration
   staging/            — temporary import/export files
 
-$OCAS_DATA_ROOT/journals/ocas-weave/
+{agent_root}/commons/journals/ocas-weave/
   YYYY-MM-DD/
     {run_id}.json     — one journal per run
 ```
@@ -267,9 +267,9 @@ All entity observations must include a `user_relevance` field: `user` if the ent
 
 On first invocation of any Weave command, `_open_db()` handles auto-initialization:
 
-1. Create `$OCAS_DATA_ROOT/db/ocas-weave/` and subdirectories (`staging/`)
+1. Create `{agent_root}/commons/db/ocas-weave/` and subdirectories (`staging/`)
 2. Write default `config.json` with ConfigBase fields if absent
-3. Create `$OCAS_DATA_ROOT/journals/ocas-weave/`
+3. Create `{agent_root}/commons/journals/ocas-weave/`
 4. Open database (auto-creates `weave.lbug` and runs DDL if tables absent)
 5. Register cron job `weave:update` if not already present (check the platform scheduling registry first)
 6. Log initialization as a DecisionRecord

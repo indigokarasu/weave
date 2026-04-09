@@ -159,22 +159,22 @@ def _run_ddl(conn):
 
 ```bash
 # Open interactive shell
-lbug $OCAS_DATA_ROOT/db/ocas-weave/weave.lbug
+lbug {agent_root}/commons/db/ocas-weave/weave.lbug
 
 # Check schema
-lbug $OCAS_DATA_ROOT/db/ocas-weave/weave.lbug -c ":schema"
+lbug {agent_root}/commons/db/ocas-weave/weave.lbug -c ":schema"
 
 # Non-interactive query
-echo "MATCH (p:Person) RETURN count(p)" | lbug $OCAS_DATA_ROOT/db/ocas-weave/weave.lbug
+echo "MATCH (p:Person) RETURN count(p)" | lbug {agent_root}/commons/db/ocas-weave/weave.lbug
 
 # Read-only shell (safe alongside running process)
-lbug $OCAS_DATA_ROOT/db/ocas-weave/weave.lbug --readonly
+lbug {agent_root}/commons/db/ocas-weave/weave.lbug --readonly
 
 # Show tables
-lbug $OCAS_DATA_ROOT/db/ocas-weave/weave.lbug -c "CALL show_tables() RETURN *"
+lbug {agent_root}/commons/db/ocas-weave/weave.lbug -c "CALL show_tables() RETURN *"
 
 # Show warnings after COPY FROM
-lbug $OCAS_DATA_ROOT/db/ocas-weave/weave.lbug -c "CALL show_warnings() RETURN *"
+lbug {agent_root}/commons/db/ocas-weave/weave.lbug -c "CALL show_warnings() RETURN *"
 ```
 
 Lock error means another process (CLI, another Python session) has the file open READ_WRITE. Check running processes, close them, retry.

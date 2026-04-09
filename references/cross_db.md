@@ -11,7 +11,7 @@ Do not ATTACH while a write transaction on weave.lbug is in progress.
 ## Cypher ATTACH pattern
 
 ```cypher
-ATTACH '~/openclaw/db/{skill-name}/{skill-name}.lbug' AS {alias} (dbtype lbug)
+ATTACH '$OCAS_DATA_ROOT/db/{skill-name}/{skill-name}.lbug' AS {alias} (dbtype lbug)
 -- run read-only queries --
 DETACH {alias};
 ```
@@ -43,9 +43,9 @@ def query_external_db(skill_name: str, cypher: str, params: dict = None):
 
 ## Known OCAS skill databases
 
-ocas-elephas -- `~/openclaw/db/ocas-elephas/chronicle.lbug` -- entity knowledge graph, maintained by Elephas
-ocas-triage -- `~/openclaw/db/ocas-triage/triage.lbug` -- task graph and priority queues
-ocas-scout -- `~/openclaw/db/ocas-scout/scout.lbug` -- OSINT research findings
+ocas-elephas -- `$OCAS_DATA_ROOT/db/ocas-elephas/chronicle.lbug` -- entity knowledge graph, maintained by Elephas
+ocas-triage -- `$OCAS_DATA_ROOT/db/ocas-triage/triage.lbug` -- task graph and priority queues
+ocas-scout -- `$OCAS_DATA_ROOT/db/ocas-scout/scout.lbug` -- OSINT research findings
 
 If a skill's path is unknown, check its SKILL.md storage layout section.
 

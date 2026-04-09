@@ -2,7 +2,7 @@
 
 Weave produces journals per spec-ocas-journal.md v1.3. Write a journal at the end of every run that modifies data or produces a query result. Runs missing journals are invalid.
 
-Journal path: `~/openclaw/journals/ocas-weave/YYYY-MM-DD/{run_id}.json`
+Journal path: `$OCAS_DATA_ROOT/journals/ocas-weave/YYYY-MM-DD/{run_id}.json`
 
 Journals are written atomically (write to `.tmp`, then rename). Never edit after writing.
 
@@ -87,7 +87,7 @@ import json, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-JOURNALS = Path("~/openclaw/journals/ocas-weave").expanduser()
+JOURNALS = Path("$OCAS_DATA_ROOT/journals/ocas-weave").expanduser()
 
 def start_run():
     return {

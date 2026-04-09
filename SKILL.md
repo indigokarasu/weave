@@ -1,9 +1,54 @@
 ---
 name: ocas-weave
-source: https://github.com/indigokarasu/weave
-install: openclaw skill install https://github.com/indigokarasu/weave
-description: Use when storing or retrieving facts about people, recording relationships, preparing for meetings, finding gift ideas, discovering connections between people, or syncing contacts. Maintains a private provenance-backed social graph (LadybugDB). Trigger phrases: 'who do I know in', 'what does X like', 'add this person', 'relationship with', 'gift ideas for', 'sync contacts', 'prepare for meeting with', 'update weave'. Do not use for OSINT investigations (use Scout) or general web research (use Sift).
-metadata: {"openclaw":{"emoji":"🕸️"}}
+description: >
+  Weave: private provenance-backed social graph. Maintains queryable records
+  of people, relationships, preferences, and shared experiences for recall,
+  gifting, hosting, introductions, and serendipity. Trigger phrases: 'who do I
+  know in', 'what does X like', 'add this person', 'relationship with', 'gift
+  ideas for', 'sync contacts', 'prepare for meeting with', 'update weave'. Use
+  when storing or retrieving facts about a person, recording a relationship,
+  or discovering connections between people.
+metadata:
+  author: Indigo Karasu
+  email: mx.indigo.karasu@gmail.com
+  version: "2.5.0"
+  hermes:
+    tags: [social-graph, people, relationships]
+    category: memory
+    cron:
+      - name: "weave:update"
+        schedule: "0 0 * * *"
+        command: "weave.update"
+  openclaw:
+    skill_type: system
+    visibility: public
+    filesystem:
+      read:
+        - "$OCAS_DATA_ROOT/data/ocas-weave/"
+        - "$OCAS_DATA_ROOT/journals/ocas-weave/"
+        - "$OCAS_DATA_ROOT/db/ocas-weave/"
+        - "$OCAS_DATA_ROOT/db/ocas-elephas/chronicle.lbug"
+      write:
+        - "$OCAS_DATA_ROOT/data/ocas-weave/"
+        - "$OCAS_DATA_ROOT/journals/ocas-weave/"
+        - "$OCAS_DATA_ROOT/db/ocas-weave/"
+    self_update:
+      source: "https://github.com/indigokarasu/weave"
+      mechanism: "version-checked tarball from GitHub via gh CLI"
+      command: "weave.update"
+      requires_binaries: [gh, tar, python3]
+    requires:
+      credentials:
+        - name: "google_contacts_oauth"
+          description: "Google People API v1 OAuth credentials for contact sync"
+          required: false
+        - name: "clay_api_key"
+          description: "Clay REST API Bearer token for CRM sync"
+          required: false
+    cron:
+      - name: "weave:update"
+        schedule: "0 0 * * *"
+        command: "weave.update"
 ---
 
 # Weave
@@ -51,12 +96,12 @@ Each Signal emitted to Elephas must include a `user_relevance` field: `user` if 
 ## Storage layout
 
 ```
-~/openclaw/db/ocas-weave/
+$OCAS_DATA_ROOT/db/ocas-weave/
   weave.lbug          — LadybugDB database (auto-created on first use)
   config.json         — connector and sync configuration
   staging/            — temporary import/export files
 
-~/openclaw/journals/ocas-weave/
+$OCAS_DATA_ROOT/journals/ocas-weave/
   YYYY-MM-DD/
     {run_id}.json     — one journal per run
 ```
@@ -222,11 +267,11 @@ All entity observations must include a `user_relevance` field: `user` if the ent
 
 On first invocation of any Weave command, `_open_db()` handles auto-initialization:
 
-1. Create `~/openclaw/db/ocas-weave/` and subdirectories (`staging/`)
+1. Create `$OCAS_DATA_ROOT/db/ocas-weave/` and subdirectories (`staging/`)
 2. Write default `config.json` with ConfigBase fields if absent
-3. Create `~/openclaw/journals/ocas-weave/`
+3. Create `$OCAS_DATA_ROOT/journals/ocas-weave/`
 4. Open database (auto-creates `weave.lbug` and runs DDL if tables absent)
-5. Register cron job `weave:update` if not already present (check `openclaw cron list` first)
+5. Register cron job `weave:update` if not already present (check the platform scheduling registry first)
 6. Log initialization as a DecisionRecord
 
 ## Background tasks
@@ -236,7 +281,7 @@ On first invocation of any Weave command, `_open_db()` handles auto-initializati
 | `weave:update` | cron | `0 0 * * *` (midnight daily) | `weave.update` |
 
 ```
-openclaw cron add --name weave:update --schedule "0 0 * * *" --command "weave.update" --sessionTarget isolated --lightContext true --timezone America/Los_Angeles
+# Task declared in SKILL.md frontmatter metadata.{platform}.cron
 ```
 
 

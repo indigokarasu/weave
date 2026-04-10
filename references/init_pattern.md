@@ -6,7 +6,7 @@ Use this pattern when implementing `_open_db` for Weave. The database auto-initi
 import real_ladybug as lb
 from pathlib import Path
 
-ROOT = Path("~/openclaw").expanduser()
+ROOT = Path("{agent_root}/commons").expanduser()
 DB_PATH = ROOT / "db/ocas-weave/weave.lbug"
 STAGING = ROOT / "db/ocas-weave/staging"
 JOURNALS = ROOT / "journals/ocas-weave"

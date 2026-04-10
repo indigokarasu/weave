@@ -81,11 +81,11 @@ from pathlib import Path
 import uuid, json
 from datetime import datetime, timezone
 
-OCAS_BASE = Path("~/openclaw").expanduser()
-DB_PATH = OCAS_BASE / "db/ocas-weave/weave.lbug"
-STAGING = OCAS_BASE / "db/ocas-weave/staging"
-JOURNALS = OCAS_BASE / "journals/ocas-weave"
-CONFIG_PATH = OCAS_BASE / "db/ocas-weave/config.json"
+COMMONS_ROOT = Path("{agent_root}/commons").expanduser()
+DB_PATH = COMMONS_ROOT / "db/ocas-weave/weave.lbug"
+STAGING = COMMONS_ROOT / "db/ocas-weave/staging"
+JOURNALS = COMMONS_ROOT / "journals/ocas-weave"
+CONFIG_PATH = COMMONS_ROOT / "db/ocas-weave/config.json"
 
 def _open_db(read_only=False):
     """Open connection. Auto-inits schema and directories on first use."""

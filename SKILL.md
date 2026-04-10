@@ -11,7 +11,7 @@ description: >
 metadata:
   author: Indigo Karasu
   email: mx.indigo.karasu@gmail.com
-  version: "2.5.1"
+  version: "2.5.2"
   hermes:
     tags: [social-graph, people, relationships]
     category: memory
@@ -329,7 +329,7 @@ public
 This skill self-updates every 24 hours via:
 
 ```bash
-openclaw weave.update
+weave.update
 ```
 
 This pulls the latest version from GitHub and restarts the skill's background tasks if applicable.

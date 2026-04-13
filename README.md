@@ -55,6 +55,9 @@ Weave maintains a private social graph where every stored fact carries provenanc
 
 ## Changelog
 
+### v2.6.0 — April 12, 2026
+- Document Google Contacts sync procedure, OAuth scopes, and pitfalls; Clay → Mesh MCP migration note
+
 ### v2.4.0 -- April 2, 2026
 - Structured entity observations in journal payloads (`entities_observed`, `relationships_observed`, `preferences_observed`)
 - `user_relevance` tagging on journal observations and optional signal emission (default `user` for social graph entities)

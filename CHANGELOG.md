@@ -1,3 +1,13 @@
+## [2.6.0] - 2026-04-12
+
+### Added
+- Google Contacts sync: inbound sync procedure, OAuth scope requirements, known pitfalls (false duplicate prevention, scope expansion, phone hygiene, bulk import)
+- Write-back rule: requires config flag AND explicit per-sync user approval
+- Clay/Mesh MCP integration note: old Clay REST API deprecated, current path is Mesh MCP via Smithery
+
+### Changed
+- Optional skill cooperation updated with Clay MCP entry
+
 ## [2026-04-04] Spec Compliance Update
 
 ### Changes

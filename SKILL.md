@@ -11,7 +11,7 @@ description: >
 metadata:
   author: Indigo Karasu
   email: mx.indigo.karasu@gmail.com
-  version: "2.5.3"
+  version: "2.6.0"
   hermes:
     tags: [social-graph, people, relationships]
     category: memory
@@ -247,6 +247,7 @@ skill_okrs:
 - Elephas — journal entity observations consumed during Chronicle ingestion
 - Scout — receive OSINT findings about people as upsert candidates
 - Dispatch — provide social graph context for communication drafting
+- **Clay (Mesh MCP)** — CRM sync via Smithery (`clay-inc/clay-mcp`). The old Clay REST API (`api.clay.com/v1/`, `api.clay.earth/v1/`) is deprecated. Current integration uses Mesh MCP over HTTP via Smithery. Auth is OAuth (not API key). Install: `npx -y @smithery/cli@latest mcp add clay-inc/clay-mcp`.
 
 
 ## Journal outputs
@@ -304,6 +305,26 @@ On first invocation of any Weave command, `_open_db()` handles auto-initializati
    ```
 6. On failure → retry once. If second attempt fails, report the error and stop.
 7. Output exactly: `I updated Weave from version {old} to {new}`
+
+
+## Google Contacts sync
+
+Weave can be populated from Google Contacts via an inbound sync. Match contacts by `google_resource_name`, then email, then phone. Never match on name alone — risk of false duplicates is high.
+
+**OAuth scopes required:**
+- Read-only: `https://www.googleapis.com/auth/contacts.readonly`
+- Full (incl. Other Contacts): `contacts` + `contacts.readonly` + `contacts.other.readonly`
+- Write-back to Google: `contacts` scope + explicit per-sync user approval
+
+**Known pitfalls:**
+- `otherContacts()` API is unreliable — use REST with `contacts.other.readonly` scope instead
+- `expiry` field in token may be ISO string or integer; handle both
+- Scope expansion always requires re-auth with `prompt=consent&access_type=offline`
+- Bulk imports (>100 rows) should use `COPY FROM` not individual inserts
+- Phone numbers may arrive with malformed leading `1` (e.g. `+1 (141)...`) — validate before storing
+- Provenance for imported contacts: `source_type='imported'`, `confidence=0.8`
+
+**Write-back:** Requires `writeback.google_contacts: true` in config.json AND explicit user approval per sync. Never write back without both.
 
 
 ## Visibility

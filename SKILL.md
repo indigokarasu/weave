@@ -117,6 +117,8 @@ Use `sync_id` from `sync_history.jsonl` to delete new records or revert enriched
 ### Pitfalls
 - **Other Contacts API**: `people_api.otherContacts()` is unreliable; use REST with `contacts.other.readonly`.
 - **REST API Preference**: Use `urllib.request` as `googleapiclient` is missing in `execute_code` sandbox.
+- **Bundled Script OOM**: The bundled `weave_google_bidirectional_sync.py` uses `googleapiclient.discovery.build`, which OOM-kills in the execute_code sandbox (exit code -9 / SIGKILL). For manual syncs, run inbound and outbound as **separate `execute_code` blocks** using inline `urllib.request` REST calls. Pattern: (1) Fetch Google contacts via REST → gap-fill Weave via real_ladybug → close DB. (2) Query outbound candidates from Weave → serialize to JSON → close DB → push via REST without holding DB open. Decoupling avoids memory pressure from simultaneous real_ladybug + urllib.
+- **Outbound Circular Push**: After inbound enriches records, their `record_time` updates. Filter outbound by `source_type <> 'imported'` to avoid re-pushing data just pulled from Google.
 - **Name Enrichment**: Incremental syncs typically focus on filling `name_given` and `name_family`.
 - **Token Expiry**: `expiry` field can be ISO string or integer; handle both.
 - **Scope Expansion**: Requires re-auth with `prompt=consent&access_type=offline`.
@@ -428,7 +430,7 @@ Stagger inbound and outbound by 30+ minutes to prevent quota contention on the 9
 
 The `weave:sync-google-inbound` job reads all Google Contacts and gap-fills Weave. The `weave:sync-google-outbound` job pushes Weave changes to Google using BatchUpdateContacts to minimize API calls.
 
-Manual invocation (`weave.sync.google-contacts`) runs both in sequence via `<hermes-root>/scripts/weave_google_bidirectional_sync.py`.
+Manual invocation (`weave.sync.google-contacts`) runs both in sequence. **In execute_code sandbox**, do NOT use the bundled script — it OOM-kills. Instead, run inbound and outbound as separate `execute_code` blocks using `urllib.request` REST calls, with DB connections closed between phases.
 
 
 ## Self-update

@@ -11,7 +11,7 @@ description: >
 metadata:
   author: Indigo Karasu
   email: mx.indigo.karasu@gmail.com
-  version: "2.6.0"
+  version: "3.1.0"
   hermes:
     tags: [social-graph, people, relationships]
     category: memory
@@ -271,7 +271,7 @@ Read `references/init_pattern.md` for the `_open_db` implementation pattern. Ful
 
 **weave.export** -- Export data to staging dir via `COPY TO`. Read `references/import_export.md`.
 
-**weave.sync.google-contacts** -- Bidirectional sync with Google Contacts. Read `references/connectors.md`. Inbound before outbound. Outbound requires `writeback.google_contacts: true` AND explicit per-sync approval.
+**weave.sync.google-contacts** -- Split into two independent jobs. Inbound: Google Contacts → Weave. Outbound: Weave → Google Contacts via BatchUpdateContacts. Staggered 30+ minutes apart to avoid 90 req/min quota contention. Outbound requires `writeback.google_contacts: true` in config — no per-sync approval step. Read `references/connectors.md` before any sync.
 
 **weave.sync.clay** -- Bidirectional sync with Clay. Read `references/connectors.md`. Clay is enrichment source — Weave provenance wins conflicts. Outbound requires `writeback.clay: true` AND explicit approval.
 
@@ -422,10 +422,14 @@ On first invocation of any Weave command, `_open_db()` handles auto-initializati
 | Job name | Mechanism | Schedule | Command |
 |---|---|---|---|
 | `weave:update` | cron | `0 0 * * *` (midnight daily) | `weave.update` |
+| `weave:sync-google-inbound` | cron | `0 4 * * *` (4AM UTC) | `python3 {skill_root}/scripts/weave_sync_inbound.py` |
+| `weave:sync-google-outbound` | cron | `30 4 * * *` (4:30AM UTC) | `python3 {skill_root}/scripts/weave_sync_outbound.py` |
 
-```
-# Task declared in SKILL.md frontmatter metadata.{platform}.cron
-```
+Stagger inbound and outbound by 30+ minutes to prevent quota contention on the 90 req/min Google People API ceiling.
+
+The `weave:sync-google-inbound` job reads all Google Contacts and gap-fills Weave. The `weave:sync-google-outbound` job pushes Weave changes to Google using BatchUpdateContacts to minimize API calls.
+
+Manual invocation (`weave.sync.google-contacts`) runs both in sequence via `/root/.hermes/scripts/weave_google_bidirectional_sync.py`.
 
 
 ## Self-update
@@ -451,22 +455,41 @@ On first invocation of any Weave command, `_open_db()` handles auto-initializati
 
 ## Google Contacts sync
 
-Weave can be populated from Google Contacts via an inbound sync. Match contacts by `google_resource_name`, then email, then phone. Never match on name alone — risk of false duplicates is high.
+Weave maintains bidirectional sync with Google Contacts via two separate scripts (inbound and outbound run as independent cron jobs, staggered 30+ minutes apart to avoid quota contention):
+
+- Inbound: `scripts/weave_sync_inbound.py` — Google Contacts → Weave
+- Outbound: `scripts/weave_sync_outbound.py` — Weave → Google Contacts
+
+**Why separate jobs?** Both inbound (paginated list of ALL contacts) and outbound (per-contact PATCH + etag GET) consume from the same 90 req/min Google People API quota. Running them sequentially causes cascading 429s. Staggering by 30+ minutes lets the quota window reset between runs.
+
+**Inbound:** Google Contacts → Weave. Match by `google_resource_name`, then email, then phone. Never match on name alone. Gap-fill only — Weave provenance wins. Two-pass: read-only lookup maps first, then write pass.
+
+**Outbound:** Weave → Google Contacts. Records modified since `last_sync.google_contacts` get PATCHed back to Google via `BatchUpdateContacts` (halves API consumption). Requires `writeback.google_contacts: true` in config. No per-sync approval step.
 
 **OAuth scopes required:**
-- Read-only: `https://www.googleapis.com/auth/contacts.readonly`
-- Full (incl. Other Contacts): `contacts` + `contacts.readonly` + `contacts.other.readonly`
-- Write-back to Google: `contacts` scope + explicit per-sync user approval
+- Read: `contacts` + `contacts.readonly` + `contacts.other.readonly`
+- Write-back: `contacts` scope
+
+**Google People API quota (hard-won, Apr 2026):**
+- `Critical read requests`: 90 req/min per user per project
+- **Both GET (etag fetch) and PATCH (update) count against this same 90/min bucket**
+- Outbound uses 2 API calls per contact (GET etag + PATCH) — at 90/min ceiling, that allows ~45 contacts/min
+- **Use `BatchUpdateContacts` for outbound** — up to 200 contacts per batch request, reducing 2N calls to N/200 calls
+- Recommended sleep between batches: 1.5s. Between individual PATCHes (if not batching): 1.3s minimum
+- **Rate limit backoff must start at 5s minimum**, not 0.5s — starting too aggressive causes cascading 429s without giving the quota window time to clear
+- On 429: exponential backoff starting at 5s, doubling per retry up to 4 attempts
+- On 502 (Google server error): retry once after 5s, then mark failed
+- On 404: contact was deleted from Google — clear `google_resource_name` in Weave so future syncs don't retry
 
 **Known pitfalls:**
 - `otherContacts()` API is unreliable — use REST with `contacts.other.readonly` scope instead
 - `expiry` field in token may be ISO string or integer; handle both
 - Scope expansion always requires re-auth with `prompt=consent&access_type=offline`
 - Bulk imports (>100 rows) should use `COPY FROM` not individual inserts
-- Phone numbers may arrive with malformed leading `1` (e.g. `+1 (141)...`) — validate before storing
 - Provenance for imported contacts: `source_type='imported'`, `confidence=0.8`
-
-**Write-back:** Requires `writeback.google_contacts: true` in config.json AND explicit user approval per sync. Never write back without both.
+- Outbound PATCH requires current etag from Google — fetch etag before update
+- Phone numbers may arrive with malformed leading `1` (e.g. `+1 (141)...`) — validate before storing
+- **Token path**: use `/root/.hermes/google_token.json` for Jared's contacts (Jared is the Google Contacts account owner, not Indigo)
 
 
 ## Visibility

@@ -116,7 +116,8 @@ Use `sync_id` from `sync_history.jsonl` to delete new records or revert enriched
 
 ### Pitfalls
 - **Other Contacts API**: `people_api.otherContacts()` is unreliable; use REST with `contacts.other.readonly`.
-- **REST API Preference**: Use `urllib.request` as `googleapiclient` is missing in `execute_code` sandbox.
+- **REST API Preference**: Use `urllib.request` as `googleapiclient` is missing in `execute_code` sandbox. Additionally, `googleapiclient.discovery.build` causes silent hangs (no output, no error) when run via `execute_code` or `terminal` background processes — always use `urllib.request` REST calls for Google People API.
+- **sources enum**: The `sources` query parameter for People API connections must be `READ_SOURCE_TYPE_CONTACT` (not `READ_SOURCE_CONTACT`). This matters when calling the REST API directly.
 - **Name Enrichment**: Incremental syncs typically focus on filling `name_given` and `name_family`.
 - **Token Expiry**: `expiry` field can be ISO string or integer; handle both.
 - **Scope Expansion**: Requires re-auth with `prompt=consent&access_type=offline`.

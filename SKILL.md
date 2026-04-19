@@ -490,6 +490,7 @@ Weave maintains bidirectional sync with Google Contacts via two separate scripts
 - Outbound PATCH requires current etag from Google — fetch etag before update
 - Phone numbers may arrive with malformed leading `1` (e.g. `+1 (141)...`) — validate before storing
 - **Token path**: use `/root/.hermes/google_token.json` for Jared's contacts (Jared is the Google Contacts account owner, not Indigo)
+- **execute_code timeout**: The full `weave_google_bidirectional_sync.py` script times out in `execute_code` (300s limit) when outbound has 200+ contacts (2 API calls × 1.3s sleep each). Manual sync workaround: run inbound in one `execute_code` call (fast, ~30s), then run outbound in checkpointed batches. Use `staging/outbound_ckpt.txt` (one `google_resource_name` per line) to track progress — append after each successful push, load on resume to skip already-pushed contacts. Each batch handles ~150 contacts. Cron jobs don't have this issue since they run outside `execute_code`.
 
 
 ## Visibility

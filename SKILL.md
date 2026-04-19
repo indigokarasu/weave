@@ -205,6 +205,27 @@ When querying Weave via LadybugDB (`real_ladybug`), the return format depends on
 
 Key mistake to avoid: Using `row['name']` on a list row from column selectors will raise `TypeError: list indices must be integers or slices, not str`. Always match your access pattern to the return format.
 
+### Iteration Pitfalls (discovered Apr 2026)
+
+- **`r.get_all()` fails on corrupt rows**: If any row contains corrupted/invalid UTF-8 data, `get_all()` raises `UnicodeDecodeError` and returns NOTHING — even if 99% of rows are valid. For queries over the full Person table, use row-by-row iteration with error handling instead:
+  ```python
+  rows = []
+  while True:
+      try:
+          row = r.get_next()
+          rows.append(row)
+      except StopIteration:
+          break
+      except Exception as e:
+          if "No more tuples" in str(e):
+              break  # LadybugDB raises this instead of StopIteration
+          if "utf-8" in str(e):
+              continue  # Skip corrupt row
+          raise
+  ```
+- **End-of-results exception**: `r.get_next()` raises `Runtime exception: No more tuples in QueryResult` when exhausted — NOT `StopIteration`. Always check for this string in exception handlers. The pattern `"No more tuples" in str(e)` distinguishes it from data corruption errors.
+- **Import pattern**: `from real_ladybug import Database` (top-level). `READ_ONLY`/`READ_WRITE` constants are NOT exported from `real_ladybug` — use `Database(path, read_only=True)` parameter instead. Connection: `lb.Connection(db)` then `conn.execute(cypher, params)`.
+
 ## Storage layout
 
 ```
@@ -431,6 +452,14 @@ Stagger inbound and outbound by 30+ minutes to prevent quota contention on the 9
 The `weave:sync-google-inbound` job reads all Google Contacts and gap-fills Weave. The `weave:sync-google-outbound` job pushes Weave changes to Google using BatchUpdateContacts to minimize API calls.
 
 Manual invocation (`weave.sync.google-contacts`) runs both in sequence via `<hermes-root>/scripts/weave_google_bidirectional_sync.py`.
+
+### Overnight Enrichment Pipeline
+
+Script: `<hermes-root>/scripts/overnight_weave_enrichment.py`
+Logs: `<hermes-root>/data/weave-enrichment/run.log`
+Progress: `<hermes-root>/data/weave-enrichment/progress.jsonl`
+
+**Re-processing pitfall**: The progress file tracks all contacted person IDs, but ~65% of searches return "no extractable data." If the filter excludes ALL progress-file IDs permanently, contacts that failed enrichment are never retried. Fix: only skip IDs that have `fields` (non-empty list) in the progress entry — contacts with empty `fields` should be re-attempted on subsequent runs since different search queries may yield results.
 
 
 ## Self-update

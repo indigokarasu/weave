@@ -354,3 +354,917 @@ weave.update
 ```
 
 This pulls the latest version from GitHub and restarts the skill's background tasks if applicable.
+---
+
+## Integrated: graph-expansion-pipeline (see references/)
+
+The full Graph Expansion Pipeline documentation is stored in `references/graph-expansion-pipeline.md`. It covers the multi-phase Scout → Sift → Weave enrichment workflow for batch contact processing.
+
+Related files:
+- `references/graph-expansion-pipeline.md` — full pipeline spec
+- `references/graph-expansion-pipeline-execution.md` — practical execution lessons
+- `references/ocas-expansion.md` — expansion queue orchestration
+
+---
+
+## Integrated: weave-sync-performance
+
+# Weave Sync Performance Fix (Updated Apr 2026)
+
+## Problem
+`weave:sync-contacts` outbound sync (Weave → Google) hits Google's 90 req/min People API quota. With 887 contacts, each requiring 2 API calls (etag GET + PATCH), cascading 429s cause timeout or partial completion.
+
+## Root Causes
+
+1. **Dual-quota consumption**: Both GET (etag fetch) and PATCH (update) count against the same 90 req/min bucket. With 2 calls/contact, ~45 contacts/min is the ceiling — not 60+.
+2. **Quota contention between inbound and outbound**: Running them sequentially means outbound starts already rate-limited from inbound burning quota. Stagger by 30+ minutes.
+3. **Backoff starting too low**: `backoff = 0.5s` is useless against a 90/min rolling window — it exhausts retries before the window clears. Start at **5s minimum**.
+4. **Sleep too aggressive**: `0.3s` between records = 3.3 records/s = 200/min at 2 calls each, guaranteed 429s. Correct: **1.3s** (~45/min at 2 calls).
+
+## Correct Values
+
+| Parameter | Old | Correct |
+|---|---|---|
+| Sleep between contacts | 0.3s | **1.3s** |
+| Backoff initial | 0.5s | **5.0s** |
+| Backoff max attempts | 4 | 4 |
+| Backoff escalation | 2x | 2x (5→10→20→40s) |
+| 502 retry | none | **once after 5s** |
+
+## Split Architecture (Recommended)
+
+Run inbound and outbound as **two separate cron jobs**, staggered 30+ minutes:
+
+```
+weave:sync-google-inbound   0 4 * * *  (4AM UTC)
+weave:sync-google-outbound 30 4 * * *  (4:30AM UTC)
+```
+
+Rationale: The inbound `connections().list()` paginates through ALL Google contacts and consumes significant quota before outbound even starts. Separating them lets each run in a fresh quota window.
+
+Manual runs: use the bidirectional script if you want both in sequence, but expect rate limiting on large datasets.
+
+## Correct Fixes (in-place)
+
+### Patch the shared script
+File: `<hermes-root>/scripts/weave_google_bidirectional_sync.py`
+
+```python
+# Line ~234: backoff start
+backoff = 5.0   # was 0.5
+
+# Line ~252: per-contact sleep
+time.sleep(1.3)  # was 0.3
+
+# In the retry loop for 429:
+backoff *= 2  # 5 → 10 → 20 → 40s
+
+# Add after existing 429 handler:
+elif "502" in err:
+    if attempt < 2:
+        time.sleep(5.0)  # retry once
+    else:
+        failed += 1
+```
+
+## Outbound-Only Script
+
+When only outbound sync is needed (no new Google contacts), bypass the full bidirectional script entirely:
+
+```
+python3 <hermes-root>/scripts/weave_outbound_only.py
+```
+
+This skips the paginated `connections().list()` read and goes straight to pushing Weave records — saves ~10+ quota units on large address books.
+
+## Performance Numbers
+
+- Before fix: cascading 429s, timeout, 0 contacts synced
+- With backoff=5s, sleep=1.3s: 887 contacts pushed, 1 transient 502 failure, 22 rate-limited (all recovered), completed in ~22 min
+- Throughput: ~45 contacts/min (at the 90/min ceiling with 2 calls/contact)
+
+## Key Discovery (Apr 2026)
+
+The `Refresh session has been revoked` error was a transient Nous auth issue. The real bottleneck was always rate limit cascading from dual-call-per-contact + insufficient backoff + no staggering between inbound and outbound.
+
+## Token & Account Mismatch (Critical, Apr 2026)
+
+**There are two Google token files, each tied to a DIFFERENT Google account:**
+
+| File | Account | Has `contacts` scope? | Can access Weave contacts? |
+|---|---|---|---|
+| `<hermes-root>/google_token.json` | owner | No (not listed) | **YES** — use this one |
+| `<hermes-root>/indigo_google_token.json` | Indigo | Yes | No — 404 on all Weave contacts |
+
+**Why this works:** `google_token.json` was issued with contacts scope at some point but the `scopes` field in the JSON doesn't reflect it. The token still works for all People API operations (list, get, patch).
+
+**Why this is dangerous:** If you re-authorize `google_token.json` without explicitly requesting contacts scope, the token will lose access. Always include `contacts` scope in re-auth.
+
+**Rule:** Always use `<hermes-root>/google_token.json` for Weave ↔ Google sync. Never use `indigo_google_token.json` — it's a different account and will return 404 on every contact.
+
+## searchContacts Scope Requirements
+
+The `POST /v1/people:searchContacts` endpoint **requires `contacts` scope** — returns 404 without it. The `GET /v1/people/me/connections` endpoint works with just `directory.readonly`.
+
+**Workaround when searchContacts is unavailable:** Paginate through ALL contacts via `connections.list` and build a name→resourceName map:
+
+```python
+name_to_rn = {}
+page_token = None
+while True:
+    url = f"https://people.googleapis.com/v1/people/me/connections?personFields=names&pageSize=1000"
+    if page_token:
+        url += f"&pageToken={page_token}"
+    req = urllib.request.Request(url, headers={'Authorization': f'Bearer {access_token}'})
+    resp = urllib.request.urlopen(req)
+    data = json.loads(resp.read())
+    for c in data.get('connections', []):
+        na = c.get('names', [])
+        if na and na[0].get('displayName'):
+            name_to_rn[na[0]['displayName']] = c.get('resourceName', '')
+    page_token = data.get('nextPageToken')
+    if not page_token:
+        break
+    time.sleep(0.3)
+```
+
+This takes ~2-3 seconds per 1000 contacts (with pagination). For ~900 contacts, about 3 seconds total.
+
+## Recovering Cleared google_resource_name
+
+If `google_resource_name` gets cleared from Weave records (e.g., wrong token used, or contact deleted from Google), re-link them:
+
+1. Build the name→resourceName map from Google (see above)
+2. For each Weave record missing `google_resource_name`, look up by display name
+3. Update Weave: `MATCH (p:Person {name: $name}) SET p.google_resource_name = $rn`
+4. Then proceed with normal outbound PATCH sync
+
+**Do NOT clear `google_resource_name` on 404 from a wrong token** — verify the token is correct first. A 404 from `indigo_google_token.json` doesn't mean the contact is gone; it means you're on the wrong account.
+
+## Database Lock Contention
+
+LadybugDB is single-writer. If another process holds the lock (e.g., a cron sync job running in the background), operations fail immediately.
+
+**Detection:**
+```bash
+lsof <hermes-root>/commons/db/ocas-weave/weave.lbug
+```
+
+**Resolution:**
+```bash
+kill -9 $(lsof -t <hermes-root>/commons/db/ocas-weave/weave.lbug)
+```
+
+Wait 1-2 seconds after killing before opening the database. Common lock holders:
+- Cron job `weave:sync-google-inbound` or `weave:sync-google-outbound`
+- Manual bidirectional sync script
+- Previous execute_code session that didn't close cleanly
+
+**Warning:** Killing a sync mid-operation may leave partial state. Check `last_sync` in config.json and re-run if needed.
+
+---
+
+## Integrated: weave-icloud-sync
+
+# Weave → iCloud Contact Sync (No-Directional / Push-Only)
+
+## Overview
+
+Push contacts from the Weave social graph to iCloud Contacts using Apple's CardDAV API.
+**Weave is the source of truth. iCloud is a read-only mirror.**
+
+This is intentionally **no-directional**: no inbound sync, no conflict resolution,
+no delete propagation. Weave pushes outward; iCloud never pulls back.
+
+## Why Push-Only?
+
+Full bidirectional sync with iCloud is complex because:
+- iCloud doesn't expose a clean "last modified" timestamp per contact
+- Conflict resolution (iCloud edit vs Weave edit) requires a merge strategy
+- Delete propagation (contact deleted in iCloud) needs reconciliation logic
+
+Push-only captures the key value: contacts created/updated in Weave appear in the
+iCloud app on iPhone/Mac, accessible to any iOS app, without building a sync engine.
+
+## Credentials Required
+
+| Credential | Where to get |
+|---|---|
+| Apple ID email | Your Apple account |
+| App-Specific Password | `appleid.apple.com` → Sign In → Security → App-Specific Passwords |
+
+⚠️ **Never use your regular Apple password.** App-specific passwords are required for
+two-factor authentication with third-party apps.
+
+## CardDAV API Reference
+
+**Base URL:** `https://contacts.icloud.com`
+
+### Step 1 — Discover Principal URL
+
+```
+GET /principal
+Authorization: Basic <base64(email:app-password)>
+```
+
+Response is a DAV:multistatus XML. Extract the `DAV:href` containing `/principal` —
+this is your **principal URL**.
+
+### Step 2 — Discover Address Book Home Set
+
+```
+GET /homeset
+Authorization: Basic <base64(email:app-password)>
+```
+
+Response contains `DAV:collection` entries. Find the one with
+`DAV:resourcetype` containing `addressbook`. Its `DAV:href` is your
+**addressbook URL**, e.g. `/homeset/<guid>/`.
+
+### Step 3 — Push Contacts (PUT per contact)
+
+```
+PUT {addressbook_url}/{guid}.vcf
+Authorization: Basic <base64(email:app-password)>
+Content-Type: text/vcard; charset=utf-8
+```
+
+Body: VCARD 3.0 string. On success: `201 Created` (new) or `200 OK` (update).
+
+### Step 4 — Track Sync State
+
+Store in `config.json`:
+- `last_sync.icloud` — ISO timestamp of last sync
+- `weave_icloud_uid_map` — dict mapping Weave person `id` → iCloud `guid` (without `.vcf`)
+
+## Weave → VCARD 3.0 Field Map
+
+| Weave field | VCARD property | Notes |
+|---|---|---|
+| `name` | `FN` | Required. Display name |
+| `name_given` + `name_family` | `N` | `N;TYPE=work:family;given;extra;;;` |
+| `email` | `EMAIL;TYPE=INTERNET` | First email only |
+| `phone` | `TEL;TYPE=CELL` | First phone only |
+| `org` | `ORG` | Company name |
+| `occupation` | `TITLE` | Job title |
+| `location_city` | `ADR;TYPE=INTL` | City part only |
+| `location_country` | `ADR;TYPE=INTL` | Country part only |
+| `notes` | `NOTE` | Free text |
+
+**Minimal VCARD 3.0 template:**
+```
+BEGIN:VCARD
+VERSION:3.0
+FN:{name}
+N:{family};{given};;;
+END:VCARD
+```
+
+## Implementation Pattern
+
+```python
+import requests, uuid, base64
+from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import weavelib as lb
+from pathlib import Path
+
+AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", "/root"))
+DB_PATH = AGENT_ROOT / "commons/db/ocas-weave/weave.lbug"
+CONFIG_PATH = AGENT_ROOT / "commons/db/ocas-weave/config.json"
+
+APPLE_EMAIL = os.environ.get("ICLOUD_EMAIL")
+APP_PASSWORD = os.environ.get("ICLOUD_APP_PASSWORD")
+ADDRESSBOOK_URL = None  # discovered at runtime
+
+# ─── VCARD conversion ────────────────────────────────────────────────────────
+
+def weave_to_vcard(person: dict) -> str:
+    """Convert a Weave Person dict to a VCARD 3.0 string."""
+    def esc(s):
+        return (s or "").replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;")
+
+    name = esc(person.get("name", ""))
+    given = esc(person.get("name_given", ""))
+    family = esc(person.get("name_family", ""))
+    email = esc(person.get("email", ""))
+    phone = esc(person.get("phone", ""))
+    org = esc(person.get("org", ""))
+    title = esc(person.get("occupation", ""))
+    city = esc(person.get("location_city", ""))
+    country = esc(person.get("location_country", ""))
+    notes = esc(person.get("notes", ""))
+
+    lines = [
+        "BEGIN:VCARD",
+        "VERSION:3.0",
+        f"FN:{name}",
+        f"N:{family};{given};;;",
+    ]
+    if email:
+        lines.append(f"EMAIL;TYPE=INTERNET:{email}")
+    if phone:
+        lines.append(f"TEL;TYPE=CELL:{phone}")
+    if org:
+        lines.append(f"ORG:{org}")
+    if title:
+        lines.append(f"TITLE:{title}")
+    if city or country:
+        lines.append(f"ADR;TYPE=INTL:;;{city};;;{country}")
+    if notes:
+        lines.append(f"NOTE:{notes}")
+    lines.append("END:VCARD")
+    return "\r\n".join(lines)
+
+
+# ─── CardDAV discovery ────────────────────────────────────────────────────────
+
+def discover_addressbook(email: str, password: str) -> str:
+    """Discover the user's iCloud addressbook URL via CardDAV principal + homeset."""
+    auth = base64.b64encode(f"{email}:{password}".encode()).decode()
+    headers = {"Authorization": f"Basic {auth}"}
+    base = "https://contacts.icloud.com"
+
+    # 1. principal
+    resp = requests.get(f"{base}/principal", headers=headers, timeout=15)
+    resp.raise_for_status()
+    # Parse DAV:href from XML
+    import re
+    hrefs = re.findall(r"<d:href>([^<]+)</d:href>", resp.text)
+    principal = next((h for h in hrefs if "/principal" in h), None)
+    if not principal:
+        raise RuntimeError("No principal URL found in response")
+
+    # 2. homeset
+    resp = requests.get(f"{base}/homeset", headers=headers, timeout=15)
+    resp.raise_for_status()
+    hrefs = re.findall(r"<d:href>([^<]+)</d:href>", resp.text)
+    # Find addressbook collection
+    ab_url = next((h for h in hrefs if "/addressbook/" in h), None)
+    if not ab_url:
+        raise RuntimeError("No addressbook URL found in homeset response")
+    return ab_url.rstrip("/")
+
+
+# ─── Sync ────────────────────────────────────────────────────────────────────
+
+def sync_outbound_icloud(db_path: Path, config_path: Path,
+                         email: str, password: str,
+                         dry_run: bool = False) -> dict:
+    """
+    Push Weave contacts modified since last_sync to iCloud via CardDAV.
+    Returns: {pushed, failed, skipped}
+    """
+    auth = base64.b64encode(f"{email}:{password}".encode()).decode()
+    headers_base = {"Authorization": f"Basic {auth}"}
+
+    with open(config_path) as f:
+        config = json.load(f)
+
+    last_sync = config.get("last_sync", {}).get("icloud")
+    uid_map = config.get("weave_icloud_uid_map", {})
+    ab_url = config.get("icloud_addressbook_url")
+
+    # Lazily discover addressbook URL
+    if not ab_url:
+        ab_url = discover_addressbook(email, password)
+        config["icloud_addressbook_url"] = ab_url
+
+    conn = lb.Connection(str(db_path))
+
+    # Fetch modified Weave people
+    query = """
+        MATCH (p:Person)
+        WHERE p.record_time > $ts
+        RETURN p.id, p.name, p.name_given, p.name_family,
+               p.email, p.phone, p.org, p.occupation,
+               p.location_city, p.location_country, p.notes
+    """
+    rows = list(conn.execute(query, {"ts": last_sync or "1970-01-01T00:00:00Z"}))
+
+    pushed = failed = skipped = 0
+    for row in rows:
+        pid = row[0]
+        person = {
+            "name": row[1], "name_given": row[2], "name_family": row[3],
+            "email": row[4], "phone": row[5], "org": row[6],
+            "occupation": row[7], "location_city": row[8],
+            "location_country": row[9], "notes": row[10],
+        }
+        if not person.get("name"):
+            skipped += 1
+            continue
+
+        guid = uid_map.get(pid) or str(uuid.uuid4())
+        vcard = weave_to_vcard(person)
+        url = f"{ab_url}/{guid}.vcf"
+
+        if dry_run:
+            print(f"[DRY] PUT {url}\n{vcard}")
+            pushed += 1
+            continue
+
+        try:
+            resp = requests.put(url, headers={**headers_base, "Content-Type": "text/vcard; charset=utf-8"},
+                                data=vcard.encode("utf-8"), timeout=20)
+            if resp.status_code in (200, 201):
+                uid_map[pid] = guid
+                pushed += 1
+            else:
+                failed += 1
+                print(f"iCloud PUT failed ({resp.status_code}): {resp.text[:200]}")
+        except Exception as e:
+            failed += 1
+            print(f"iCloud error for {pid}: {e}")
+
+    # Persist state
+    config["last_sync"]["icloud"] = datetime.now(timezone.utc).isoformat()
+    config["weave_icloud_uid_map"] = uid_map
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+
+    return {"pushed": pushed, "failed": failed, "skipped": skipped}
+```
+
+## Rate & Error Handling
+
+- **Rate limit**: Apple does not publish CardDAV limits. Use **1–2s delay** between contacts.
+- **409 Conflict**: Contact was modified on iCloud since last sync — fetch iCloud version,
+  merge field-by-field (Weave provenance wins), PUT back.
+- **404 on PUT**: Addressbook URL changed. Re-run discovery.
+- **401**: App-specific password expired or was revoked. Prompt user to regenerate.
+- **Stale UID (404 on known guid)**: Contact was deleted from iCloud. Remove from `uid_map`.
+
+## Config Extension
+
+Add to `config.json`:
+
+```json
+{
+  "last_sync": {
+    "google_contacts": null,
+    "clay": null,
+    "icloud": null
+  },
+  "writeback": {
+    "google_contacts": true,
+    "clay": false,
+    "icloud": true
+  },
+  "weave_icloud_uid_map": {},
+  "icloud_addressbook_url": null
+}
+```
+
+## Trigger Phrases
+
+- "sync to iCloud"
+- "push to iCloud"
+- "export contacts to iCloud"
+- "backup my contacts to iCloud"
+
+## Environment Variables
+
+| Variable | Description |
+|---|---|
+| `ICLOUD_EMAIL` | Apple ID email |
+| `ICLOUD_APP_PASSWORD` | App-specific password (from appleid.apple.com) |
+
+## Limitations
+
+- **No inbound sync**: iCloud edits never come back to Weave
+- **No delete propagation**: Deleted Weave contacts are NOT deleted from iCloud
+- **No conflict resolution**: iCloud edits to contacts that Weave also modified are overwritten on next push
+- **Single email/phone**: Only first email and phone per contact is pushed
+- **App-specific password required**: Cannot use regular Apple ID password
+
+## Future Enhancement Path
+
+If bidirectional sync becomes needed:
+1. Implement CardDAV **addressbook-query** (search by UID) to detect iCloud changes
+2. Add inbound sync phase: compare iCloud modification timestamps vs `last_sync.icloud`
+3. Weave provenance wins on conflicts (with optional merge pass for specific fields)
+4. Track deleted UIDs via CardDAV addressbook-match addressbook-multiget with prop-filter
+
+---
+
+## Integrated: google-workspace-setup
+
+# Google Workspace Setup
+
+Configures Google Workspace access for Hermes Agent with proper account isolation.
+
+## When to Use
+
+- Setting up Gmail, Calendar, Drive, Contacts, Sheets, Docs access
+- Adding a new Google account (personal and agent accounts must use separate profiles)
+- Enabling Google Cloud APIs via service account
+- Fixing authentication issues with existing Google integrations
+
+## Account Isolation Rules
+
+- The user's personal account (e.g. google-workspace-user) uses <hermes-root>/
+- The agent's account (e.g. mx.indigo.karasu@gmail.com) must use a SEPARATE profile directory
+- Never mix tokens, clients, or credentials between accounts
+- Each account needs its own OAuth Client ID + Client Secret from Google Cloud Console
+
+## OAuth Setup (User Account)
+
+1. Create OAuth Client in Google Cloud Console
+2. Add Authorized JavaScript origins: http://localhost
+3. Add Authorized redirect URIs: http://localhost:1
+4. Configure scopes needed:
+   - Gmail: gmail.readonly, gmail.send, gmail.modify
+   - Calendar: calendar
+   - Drive: drive.readonly
+   - Contacts: contacts.readonly
+   - Sheets: spreadsheets
+   - Docs: documents.readonly
+   - People: contacts or directory.readonly
+5. Generate authorization URL with PKCE flow
+6. User clicks URL in browser, authenticates with Google account
+7. User pastes back the callback URL from browser address bar
+8. Exchange code for tokens and save to <hermes-root>/google_token.json
+
+For agent account (mx.indigo.karasu@gmail.com):
+```bash
+# Create separate profile directory
+mkdir -p <hermes-root>-indigo/
+# Use separate client ID/secret for agent
+# Save token to <hermes-root>-indigo/google_token.json
+```
+
+## Service Account Setup
+
+**Step 1: Create Service Account**
+1. Go to Google Cloud Console → IAM & Admin → Service Accounts
+2. Create service account (e.g., hermes@project.iam.gserviceaccount.com)
+3. Grant appropriate roles (Editor for full access)
+4. Create key → JSON format → download
+
+**Step 2: Save Key**
+```bash
+mkdir -p ~/.hermes/credentials && chmod 700 ~/.hermes/credentials
+# Save JSON key to: ~/.hermes/credentials/{project-name}.json
+```
+
+**Step 3: Activate with gcloud**
+```bash
+gcloud auth activate-service-account {sa-email} --key-file={path-to-key} --project={project}
+```
+
+**Step 4: Enable APIs**
+```bash
+# Enable via gcloud
+gcloud services enable gmail.googleapis.com --project={project}
+gcloud services enable drive.googleapis.com --project={project}
+gcloud services enable people.googleapis.com --project={project}
+
+# Or enable via Python API (works when gcloud has OpenSSL issues)
+python3 -c "
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+creds = service_account.Credentials.from_service_account_file('{key-path}')
+su = build('serviceusage', 'v1', credentials=creds)
+for api in ['gmail.googleapis.com', 'drive.googleapis.com', 'people.googleapis.com']:
+    su.services().enable(name=f'projects/{project}/services/{api}', body={}).execute()
+    print(f'Enabled {api}')
+"
+```
+
+## Common API Endpoints to Enable
+
+| API | When Needed |
+|-----|-------------|
+| gmail.googleapis.com | Email access |
+| calendar.googleapis.com | Calendar management |
+| drive.googleapis.com | File organization |
+| people.googleapis.com | Google Contacts |
+| sheets.googleapis.com | Spreadsheet access |
+| docs.googleapis.com | Document editing |
+| admin.googleapis.com | Workspace admin operations |
+| cloudresourcemanager.googleapis.com | Project management |
+| iam.googleapis.com | Service account management |
+| serviceusage.googleapis.com | API enablement |
+
+## Pitfalls
+
+### Scope Expansion Requires User Re-Auth
+
+When adding a new scope (e.g. `contacts`) to an existing token, `google_token.json` shows the old scopes. Simply re-authorizing with `prompt=consent&access_type=offline` upgrades the token with the new scopes. No need to delete/recreate the client.
+
+**Workflow:**
+```bash
+# 1. Check what scopes are missing
+PYTHONPATH=<hermes-root>/hermes-agent python3 <hermes-root>/skills/productivity/google-workspace/scripts/setup.py --check
+# Exit 1 + AUTH_SCOPE_MISMATCH = scopes need upgrading
+
+# 2. Generate auth URL with all scopes including new ones
+PYTHONPATH=<hermes-root>/hermes-agent python3 <hermes-root>/skills/productivity/google-workspace/scripts/setup.py --auth-url
+# Send URL to user, user visits → gets redirected → pastes code
+
+# 3. Exchange code for upgraded token
+PYTHONPATH=<hermes-root>/hermes-agent python3 <hermes-root>/skills/productivity/google-workspace/scripts/setup.py --auth-code {CODE}
+
+# 4. Verify
+PYTHONPATH=<hermes-root>/hermes-agent python3 <hermes-root>/skills/productivity/google-workspace/scripts/setup.py --check
+```
+
+**NOTE:** `setup.py --auth-url` always regenerates a fresh PKCE challenge. The pending auth state is saved to `google_oauth_pending.json`. The auth URL includes all scopes listed in `SCOPES` in `setup.py`, so `setup.py` must have the desired scopes listed BEFORE generating the URL.
+
+### Token Refresh Fails with `invalid_scope` (Corrupted Token)
+
+Even when `google_token.json` shows correct scopes, Google may reject token refresh with:
+```
+google.auth.exceptions.RefreshError: ('invalid_scope: Bad Request', {'error': 'invalid_scope'})
+```
+
+This means the token is corrupted and must be re-issued. Do not try to repair it.
+
+**Re-authentication flow:**
+
+```bash
+# 1. Check current auth status (requires PYTHONPATH)
+PYTHONPATH=<hermes-root>/hermes-agent python3 <hermes-root>/skills/productivity/google-workspace/scripts/setup.py --check
+
+# 2. Generate fresh auth URL
+PYTHONPATH=<hermes-root>/hermes-agent python3 <hermes-root>/skills/productivity/google-workspace/scripts/setup.py --auth-url
+
+# 3. User visits URL, authorizes, copies the `code=` from redirect URL
+
+# 4. Exchange code for new token
+PYTHONPATH=<hermes-root>/hermes-agent python3 <hermes-root>/skills/productivity/google-workspace/scripts/setup.py --auth-code {CODE}
+
+# 5. Verify
+PYTHONPATH=<hermes-root>/hermes-agent python3 <hermes-root>/skills/productivity/google-workspace/scripts/setup.py --check
+```
+
+The `--check` command returns exit code 0 on success, 1 on failure.
+
+### Private Key Format Issues
+- If gcloud says "Could not deserialize key data", check:
+  - The key file must have actual newlines, not \n strings
+  - The key must be exactly 64 chars per line
+  - Check if the key is corrupted during paste/transfer
+
+### Service Account Can't Access Personal Drive Files
+- Service accounts have their own isolated Drive
+- To access user's files: share files WITH the service account email
+- For shared Drive access: add service account as member
+
+### gcloud OpenSSL Compatibility
+- gcloud sometimes has OpenSSL 3.0 compatibility issues
+- Python google-api-python-client works reliably as alternative
+- Always have both installed for fallback
+
+### OAuth Token Expiry
+- Access tokens expire in ~1 hour
+- Refresh tokens should persist indefinitely
+- Always check token validity before API calls:
+```python
+from google.auth.transport.requests import Request
+if not creds.valid and creds.expired and creds.refresh_token:
+    creds.refresh(Request())
+```
+
+### Google Calendar API Script Limitations
+
+The `google_api.py` script has specific behaviors not obvious from usage:
+
+**No Update Command:**
+- `calendar update` does NOT exist
+- To modify an event: delete then recreate
+- Delete uses positional event_id: `calendar delete {event_id}` (not `--id` or `--event-id`)
+
+**Timezone Required:**
+- Start/end times MUST include timezone offset
+- Valid: `2026-04-16T11:30:00-07:00`
+- Invalid: `2026-04-16T11:30:00` (returns "Missing time zone definition")
+
+**Create Command Arguments:**
+```bash
+python3 google_api.py calendar create \
+  --summary "Event Title" \
+  --start "2026-04-16T11:30:00-07:00" \
+  --end "2026-04-16T12:30:00-07:00" \
+  --location "Full Address" \
+  --description "Details"
+```
+
+### Cron Job Fallback When Token is Expired
+
+When a **cron job** encounters `invalid_grant` (no user present for re-auth):
+
+1. **Do NOT suppress the error.** Surface it prominently in the briefing/output.
+2. **Fall back to cached data** from `events.jsonl` or previous journal runs. The events.jsonl in `{agent_root}/commons/data/ocas-sands/` contains queried events with timestamps.
+3. **Label all output as "cached/stale"** — make it clear the data may not reflect current calendar state.
+4. **Generate the re-auth URL** so the user can fix it when they're next available:
+   ```bash
+   PYTHONPATH=<hermes-root>/hermes-agent python3 <hermes-root>/skills/productivity/google-workspace/scripts/setup.py --auth-url
+   ```
+5. **Log the auth failure** to decisions.jsonl and the skill journal.
+6. **Write the briefing anyway** from cached data — a stale briefing is better than no briefing.
+
+**Pattern for reading cached events:**
+```python
+# Read events.jsonl for previously-queried events on target date
+import json
+events = []
+with open(f"{data_dir}/events.jsonl") as f:
+    for line in f:
+        ev = json.loads(line.strip())
+        if target_date in ev.get("start", ""):
+            events.append(ev)
+```
+
+**Key insight:** The Sands evening briefing queries events for the *next* day and writes them to events.jsonl. So the morning briefing can fall back to the previous evening's data even when the Google API is unreachable.
+
+### Skill Invocation Pattern
+
+OCAS skills (sands, weave, scout, etc.) are NOT CLI executables. Do NOT attempt:
+- `hermes sands.event.create` — fails (not a hermes CLI command)
+- `openclaw weave.upsert.person` — fails (openclaw CLI doesn't exist)
+- `hermes chat --skill sands` — fails (no such flag)
+
+**Correct approaches:**
+1. Use the Google Workspace API scripts directly for Calendar/Gmail/Drive
+2. Use `delegate_task` with a subagent that has the skill loaded
+3. Access LadybugDB (Weave) directly via Python if the module is installed
+4. For Scout: use web_search/web_extract directly for OSINT
+
+If a skill's CLI entry point is missing, fall back to direct API calls or database access.
+
+## Verification
+
+Test each service after setup:
+```python
+# Gmail
+from googleapiclient.discovery import build
+service = build('gmail', 'v1', credentials=creds)
+profile = service.users().getProfile(userId='me').execute()
+print(f"Gmail connected: {profile['emailAddress']}")
+
+# Drive
+drive = build('drive', 'v3', credentials=creds)
+results = drive.files().list(pageSize=5, fields="files(id, name)").execute()
+files = results.get('files', [])
+print(f"Drive: {len(files)} files visible")
+
+# Calendar
+calendar = build('calendar', 'v3', credentials=creds)
+calendars = calendar.calendarList().list().execute()
+print(f"Calendar: {len(calendars.get('items', []))} calendars")
+
+# Contacts
+people = build('people', 'v1', credentials=creds)
+count = 0
+page_token = None
+while True:
+    result = people.people().connections().list(
+        resourceName='people/me',
+        pageSize=1000,
+        personFields='names,emailAddresses',
+        pageToken=page_token
+    ).execute()
+    count += len(result.get('connections', []))
+    page_token = result.get('nextPageToken')
+    if not page_token:
+        break
+print(f"Contacts: {count} contacts")
+```
+
+## Environment Variables
+
+```bash
+# User's personal account
+export GOOGLE_CLIENT_ID=your-oauth-client-id
+export GOOGLE_CLIENT_SECRET=your-oauth-client-secret
+
+# Agent's account (if separate)
+export AGENT_GOOGLE_CLIENT_ID=agent-oauth-client-id
+export AGENT_GOOGLE_CLIENT_SECRET=agent-oauth-client-secret
+
+# Service account (alternative auth method)
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
+```
+
+## Storage Locations
+
+```
+~/.hermes/
+├── google_token.json              # User's OAuth token
+├── google_client_secret.json      # User's OAuth client secrets
+├── credentials/
+│   ├── project-name.json          # Service account key
+│   └── ...
+└── hermes-indigo/                 # Agent's separate profile
+    └── google_token.json
+```
+
+## Cron Job Pattern for Background Tasks
+
+When registering background tasks from skills:
+```bash
+hermes cron list  # Check existing first
+
+# Create new job
+hermes cron add --name {skill:task} \
+  --schedule "{cron_expression}" \
+  --command "{skill.command}" \
+  --sessionTarget isolated \
+  --lightContext true \
+  --timezone America/Los_Angeles
+```
+
+Common schedules:
+- Updates: `0 0 * * *` (midnight daily)
+- Morning briefs: `0 6 * * *`
+- Evening briefs: `0 20 * * *`
+- Weekly deep scans: `0 1 * * 0` (Sunday 1am)
+- Weekday morning tasks: `0 6 * * 1-5`
+
+All cron jobs:
+- deliver to `local` to avoid chat spam
+- Use isolated sessions
+- Light context enabled
+- America/Los_Angeles timezone
+
+---
+
+## Integrated: google-token-audit
+
+# Google Token Audit
+
+## When Google API Returns 403 or invalid_grant
+
+**STOP.** Do NOT conclude that access is revoked or scopes are insufficient until you have:
+
+1. **Found ALL token files on disk.** Search broadly:
+   - `find <hermes-root>* -name "google_token*" -type f`
+   - `find <hermes-root>* -name "*.json" | xargs grep -l "refresh_token"`
+   - Check backup dirs (`*.backup`, `*.bak`, dated directories)
+
+2. **Tested EACH token individually.** Load each one, attempt the failing API call, record success/failure.
+
+3. **Compared scopes.** Decode each token's scope field. The broadest-scope working token wins.
+
+## Key Lessons (Apr 2026)
+
+- The Drive API allows **root-level file listing** even with narrow scopes (e.g., `contacts` only). This creates false confidence — you can list folders but not query inside them.
+- `invalid_grant` during refresh does NOT always mean the token is dead. You may be using the wrong client secret, the wrong token file, or initializing the client incorrectly.
+- **The user is almost always right** when they say "it's not a permission issue." Check your code before blaming the API.
+- Legacy backup tokens can be valid and have broader scopes than the "current" one.
+
+## Fix Pattern
+
+1. Audit all google_token*.json files
+2. Test each against a real Drive query (e.g., list files in a specific folder)
+3. Identify the token with broadest scopes that actually works
+4. Copy it to `~/.hermes/google_token.json`
+5. Delete all obsolete tokens to prevent future confusion
+6. Re-run the operation that was failing
+
+## Common Locations
+
+- `<hermes-root>/google_token.json` — primary
+- `<hermes-root>/google_token.json.backup` — backup
+- `<hermes-root>/google_token.json.bak` — backup
+- `<hermes-root>/2026-04-06_21-34-18/google_token.json` — legacy backup
+- `<hermes-root>-indigo/google_token.json` — Indigo account token
+
+---
+
+## Integrated: google-token-architecture
+
+# Google Token Architecture
+
+## Token Files (MANDATORY NAMING)
+- **owner's token**: `<hermes-root>/owner_google_token.json` (google-workspace-user)
+- **Indigo's token**: `<hermes-root>/indigo_google_token.json` (mx.indigo.karasu@gmail.com)
+- **NEVER** use generic `google_token.json` — always use the explicit prefixed filenames
+
+## OAuth Clients
+- owner's client_id: `112292610034-1revbmnkves56ago2c2t5dul5mj9bc17` (secret: `<hermes-root>/google_client_secret.json`)
+- Indigo's client_id: `550801240087-vmc47b1gflj2biblqdr6bkekl7qqm8ls` (secret: `<hermes-root>-indigo/google_client_secret.json`)
+
+## Scopes
+Both tokens were re-authorized Apr 15 2026 with ALL possible Google Workspace scopes (gmail.readonly, gmail.send, gmail.modify, calendar, drive, contacts, directory.readonly, spreadsheets, documents, presentations, forms).
+
+## Email Delivery Architecture
+- **ocas-dispatch** owns the email lifecycle (send, scan, label, draft)
+- **send_message_tool.py** — email path REMOVED; only a dumb pipe for non-email platforms (Telegram, Discord, Slack, etc.)
+- **google_api.py** — low-level engine, callable by Dispatch but NOT directly for cron delivery
+- **email-delivery-routing** — documentation skill only, not executable code
+- **himalaya** — listed as a skill but NOT the correct tool; do NOT use for email
+- PR posted: `dispatch-email-ownership` on indigokarasu GitHub
+
+## Critical Rules
+1. NEVER overwrite one account's token with another's. This was the root cause of the morning briefing delivery failure (Apr 12-14 2026).
+2. When checking email delivery, check BOTH inboxes directly using the correct named tokens — never ask the user to confirm receipt.
+3. If `invalid_grant` appears, check which token is actually being used before assuming the API is down.
+4. When generating OAuth auth URLs, use the correct client_secret for the target account, and save the PKCE verifier to complete the exchange.
+
+## Cron Delivery
+- All cron jobs switched from Telegram delivery to `local` (Apr 15 2026) to stop spamming user's channel.
+- If cron output still appears on Telegram, check for hardcoded delivery calls inside skill scripts bypassing the registry.
+- Midnight UTC collision: many cron jobs fire simultaneously → rate limit cascade → API 429 errors.

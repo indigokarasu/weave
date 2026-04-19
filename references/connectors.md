@@ -93,38 +93,118 @@ def sync_inbound_google(db, creds):
     return {"upserted": upserted, "skipped": skipped}
 ```
 
-Outbound sync (requires writeback enabled + explicit approval):
+Outbound sync (requires `writeback.google_contacts: true` in config — no per-sync approval needed):
 
 ```python
 def sync_outbound_google(db, creds, last_sync_at):
+    import time
     conn = lb.Connection(db)
     service = build("people", "v1", credentials=creds)
     rows = list(conn.execute("""
         MATCH (p:Person)
         WHERE p.record_time > $ts AND p.google_resource_name IS NOT NULL
         RETURN p.google_resource_name, p.name_given, p.name_family,
-               p.email, p.phone, p.org, p.occupation
+               p.email, p.phone, p.org, p.occupation, p.location_city,
+               p.location_country, p.notes, p.id
     """, {"ts": last_sync_at}))
-    pushed = failed = 0
-    for rn, given, family, email, phone, org, title in rows:
-        body = {
-            "names": [{"givenName": given, "familyName": family}],
-            "emailAddresses": [{"value": email}] if email else [],
-            "phoneNumbers": [{"value": phone}] if phone else [],
-            "organizations": [{"name": org, "title": title}] if org else [],
-        }
-        try:
-            service.people().updateContact(
-                resourceName=rn,
-                updatePersonFields="names,emailAddresses,phoneNumbers,organizations",
-                body=body
-            ).execute()
-            pushed += 1
-        except Exception as e:
-            failed += 1
-            print(f"Failed {rn}: {e}")
-    return {"pushed": pushed, "failed": failed}
+    pushed = failed = skipped = stale = rate_limited = 0
+    for rn, given, family, email, phone, org, title, city, country, notes, pid in rows:
+        body = {}
+        if given or family:
+            body["names"] = [{"givenName": given or "", "familyName": family or ""}]
+        if email:
+            body["emailAddresses"] = [{"value": email}]
+        if phone:
+            body["phoneNumbers"] = [{"value": phone}]
+        if org or title:
+            body["organizations"] = [{"name": org or "", "title": title or ""}]
+        if city or country:
+            body["addresses"] = [{"city": city or "", "countryCode": country or ""}]
+        if notes:
+            body["biographies"] = [{"value": notes}]
+        if not body:
+            skipped += 1
+            continue
+        update_fields = [k for k in ["names","emailAddresses","phoneNumbers",
+                                      "organizations","addresses","biographies"] if k in body]
+        attempt, backoff = 0, 5.0
+        while attempt < 4:
+            attempt += 1
+            try:
+                # Fetch etag FIRST (required for PATCH)
+                current = service.people().get(
+                    resourceName=rn, personFields="metadata"
+                ).execute()
+                etag = current.get("etag")
+                if etag:
+                    body["etag"] = etag
+                service.people().updateContact(
+                    resourceName=rn,
+                    updatePersonFields=",".join(update_fields),
+                    body=body
+                ).execute()
+                pushed += 1
+                time.sleep(1.3)  # ~45 contacts/min at 2 calls each — stay under 90/min quota
+                break
+            except Exception as e:
+                err = str(e)
+                if "404" in err or "NOT_FOUND" in err:
+                    # Stale: contact deleted from Google — clear Weave reference
+                    conn.execute("""
+                        MATCH (p:Person {id: $id})
+                        SET p.google_resource_name = null
+                    """, {"id": pid})
+                    stale += 1
+                    break
+                elif "429" in err or "RESOURCE_EXHAUSTED" in err or "rate limit" in err.lower():
+                    rate_limited += 1
+                    if attempt < 4:
+                        time.sleep(backoff)
+                        backoff *= 2  # 5s → 10s → 20s → 40s
+                    else:
+                        failed += 1
+                elif "502" in err:
+                    # Transient Google server error — retry once after 5s
+                    if attempt < 2:
+                        time.sleep(5.0)
+                    else:
+                        failed += 1
+                else:
+                    failed += 1
+                    break
+    return {"pushed": pushed, "failed": failed, "skipped": skipped,
+            "stale": stale, "rate_limited": rate_limited}
 ```
+
+## Google People API — Operational Learnings (Apr 2026)
+
+**Quota limits (hard-won):**
+- `Critical read requests` quota: 90/min per user per project
+- **Both GET (etag fetch) AND PATCH (update) count against this same 90/min bucket**
+- At 1.3s sleep between contacts: ~45 contacts/min — within safe margin
+- **Use `BatchUpdateContacts` for outbound** — up to 200 contacts per batch, reduces 2N API calls to N/200
+- If not batching: sleep 1.3s minimum between individual contact updates
+- If batching (recommended): sleep 1.5s between batches of 200
+
+**Rate limit backoff (critical):**
+- Start backoff at **5s minimum**, not 1s — starting too aggressive cascades 429s without clearing the quota window
+- On 429: retry with exponential backoff doubling from 5s (5s → 10s → 20s → 40s), max 4 attempts
+- On 502 (Google server error): retry once after 5s, then mark failed — 502s are transient
+
+**Etag requirement:**
+- `updateContact` requires current etag in the request body or returns 412
+- Must GET the contact first to obtain the etag (counts toward read quota)
+- **With BatchUpdateContacts**: provide etag per contact in the batch body
+
+**Stale references (404):**
+- A Weave record may have `google_resource_name` but the contact was deleted from Google
+- On 404: clear `google_resource_name` in Weave so future syncs don't retry
+- Track as `stale` count in sync results
+
+**Token path:**
+- Use `/root/.hermes/google_token.json` — Jared is the Google Contacts account owner
+- Indigo's token is at `/root/.hermes-indigo/google_token.json` and is a separate account
+
 
 ## Clay
 

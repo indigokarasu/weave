@@ -11,7 +11,7 @@ description: >
 metadata:
   author: Indigo Karasu
   email: mx.indigo.karasu@gmail.com
-  version: "2.6.0"
+  version: "3.1.0"
   hermes:
     tags: [social-graph, people, relationships]
     category: memory
@@ -75,7 +75,106 @@ Weave maintains a private, provenance-backed social graph of people, relationshi
 - Personality profiling without evidence
 
 
-## Responsibility boundary
+## Integrated: google-contacts-weave-sync
+
+Bidirectional sync between Google Contacts and Weave's LadybugDB social graph. Imports contacts as Person nodes, enriches existing records with missing fields, and tracks all changes for undo.
+
+### When to use
+- Initial Weave population from Google Contacts
+- Periodic refresh to catch new/changed contacts
+- Enriching existing Weave records with email, phone, org data
+- Auditing contacts overlap between Google and Weave
+
+### When not to use
+- OSINT on people (use Scout)
+- General contact research (use Sift)
+- Writing back to Google without explicit approval
+
+### Scope Requirements
+| Direction | Required Scope | Notes |
+|-----------|---------------|-------|
+| Inbound (read) | `contacts.readonly` | My Contacts only |
+| Inbound (full) | `contacts` + `contacts.readonly` + `contacts.other.readonly` | My Contacts + Other Contacts |
+| Write-back (outbound) | `contacts` | Requires full scope |
+
+### Token and OAuth
+Google OAuth token at `/root/.hermes/google_token.json`. Client ID is `112292610034-1revbmnkves56ago2c2t5dul5mj9bc17.apps.googleusercontent.com`.
+
+### Inbound Sync Procedure
+1. **Check/Initialize Weave Schema**: Verify database has tables. Refer to `references/schemas.md` for full DDL.
+2. **Fetch Google Contacts**: Use REST API via `urllib.request` (preferred) or `googleapiclient` SDK.
+3. **Load Existing Weave State**: Load Person nodes by email and phone for cross-referencing.
+4. **Cross-Reference and Sync**: Match by `google_resource_name`, then email, then phone. Apply enrichment logic (only fill NULL/empty fields).
+5. **Track Changes**: Write to `/root/.hermes/data/hermes-weave/sync_history.jsonl`.
+6. **Update Config**: Update `last_sync` in `config.json`.
+
+### Write-Back (Outbound)
+Requires `writeback.google_contacts: true` in config.json AND explicit per-sync user approval.
+
+### Undo
+Use `sync_id` from `sync_history.jsonl` to delete new records or revert enriched fields.
+
+### Pitfalls
+- **Other Contacts API**: `people_api.otherContacts()` is unreliable; use REST with `contacts.other.readonly`.
+- **REST API Preference**: Use `urllib.request` as `googleapiclient` is missing in `execute_code` sandbox.
+- **Name Enrichment**: Incremental syncs typically focus on filling `name_given` and `name_family`.
+- **Token Expiry**: `expiry` field can be ISO string or integer; handle both.
+- **Scope Expansion**: Requires re-auth with `prompt=consent&access_type=offline`.
+- **False Duplicates**: Never match on name alone.
+- **Provenance**: Use `source_type='imported'`, `source_ref=<resourceName>`, `confidence=0.8`.
+- **Performance**: Use `COPY FROM` for bulk imports (>100 rows).
+- **Malformed US Phones**: Avoid numbers with extra leading `1` after country code (e.g. `+1 (141)...`).
+- **Privacy Masking**: LadybugDB driver masks phone display but stores full digits.
+- **Phone Hygiene**: Run cleanup pass to remove `.0` suffixes and invalid patterns.
+
+## Integrated: mesh-mcp-clay-connectors
+
+Connect to the Mesh MCP (Clay/Me.sh successor) via Smithery for CRM sync with Weave.
+
+### Current Status
+- **Old Clay API: DEPRECATED** (`api.clay.com/v1/`, `api.clay.earth/v1/`).
+- **Mesh MCP: Working via Smithery** (`https://server.smithery.ai/clay-inc/clay-mcp`). Transport: MCP over HTTP. Auth: Bearer token.
+
+### Connecting
+- **Smithery CLI**: `npx -y @smithery/cli@latest mcp add clay-inc/clay-mcp` (Requires OAuth flow).
+- **mcporter**: Config via `mcpServers` in JSON.
+
+### Available Tools
+- `searchContacts`, `getContact`, `createContact`, `updateContact`, `addContactToGroup`, `get_user_information`.
+
+### Auth Troubleshooting
+- Clay API key does NOT work as Bearer token for Mesh MCP. Must complete OAuth flow at Smithery.ai.
+
+### Pitfalls
+- **API Key vs OAuth**: Migration from `clay.earth` to `me.sh` requires moving to Mesh MCP on Smithery.
+- **Terminal Hangs**: Use `pty=true` for interactive `npx` or `mcporter` commands.
+
+## Integrated: ocas-expansion
+
+Orchestrates a multi-phase pipeline to enrich the personal social graph (Weave) combining interior knowledge with external OSINT and professional research.
+
+### Execution Phases
+1. **Structural Baseline (Scout)**: Establish "Current State" (`job_title`, `organization`, `location`) via OSINT.
+2. **Intellectual Depth (Sift)**: Discover "Digital Footprints" (portfolios, blogs, press) and extract projects/philosophies.
+3. **Synthesis & Permanence (Weave)**: Convert raw data into `Preference` or `Experience` nodes with provenance.
+
+### Pitfalls & Workarounds
+- **Search Failures**: When `web_search` (Firecrawl) fails with "Payment Required", use:
+  - **Email Domain Inference**: Infer company from email domain (confidence 0.7).
+  - **Semantic Scholar API**: Free academic profile lookup (unauthenticated).
+  - **GitHub Public API**: Search commits by email to find activity/profiles.
+  - **Direct Staff Directories**: Navigate to `{org_website}/about/staff-directory` (confidence 0.95).
+  - **Brave Search/SearchX**: Use as alternatives to Firecrawl.
+- **Disambiguation**: Cross-check academic publications against expected professional domain.
+- **LinkedIn Authwall**: Browser scraping returns login page; use search snippets.
+- **LadybugDB Constraints**: 
+  - Use `CREATE` for relationship properties (not `MERGE` with inline props).
+  - Create two directed edges for bidirectional relations.
+  - Use `org` and `occupation` fields (not `company` or `job_title`).
+- **Google Drive/Docs**: Use OAuth tokens (`~/.hermes/google_token.json`) instead of service accounts to avoid 403 quota/permission errors.
+
+### Report Output
+Final report link saved to `/root/.hermes/commons/data/ocas-expansion/last_run_report.txt`.
 
 Weave owns the private social graph: people, relationships, preferences, and shared experiences.
 
@@ -92,6 +191,18 @@ Weave works with these types from `spec-ocas-ontology.md`:
 Weave may optionally emit Signals to Elephas for Person nodes with high-confidence identity markers, but this is not required for normal operation.
 
 Each Signal emitted to Elephas must include a `user_relevance` field: `user` if the entity is directly related to the user's world, `agent_only` if encountered incidentally, `unknown` if unclear. Weave entities are almost always `user`-relevant since they represent the user's actual social connections.
+
+## LadybugDB Query Result Handling
+
+When querying Weave via LadybugDB (`real_ladybug`), the return format depends on the Cypher clause:
+
+- **`RETURN p`** (whole node): Each row is a **dict** with all properties plus `_ID` and `_LABEL` keys. Use dict access like `row['name']` or `row.get('name')`.
+- **`RETURN p.id, p.name, ...`** (column selectors): Each row is a **list** (not a dict). Map column names to indices using `r.get_column_names()`. Example: `cols = r.get_column_names(); row[cols.index('p.name')]`.
+- **`r.get_all()`** returns a Python list of rows (each row is either dict or list depending on your RETURN clause).
+- **`r.rows_as_dict()`** returns a *QueryResult* object, NOT a Python dict — do not treat it as data.
+- **`r.get_column_names()`** works for all queries and returns a list of column name strings.
+
+Key mistake to avoid: Using `row['name']` on a list row from column selectors will raise `TypeError: list indices must be integers or slices, not str`. Always match your access pattern to the return format.
 
 ## Storage layout
 
@@ -160,7 +271,7 @@ Read `references/init_pattern.md` for the `_open_db` implementation pattern. Ful
 
 **weave.export** -- Export data to staging dir via `COPY TO`. Read `references/import_export.md`.
 
-**weave.sync.google-contacts** -- Bidirectional sync with Google Contacts. Read `references/connectors.md`. Inbound before outbound. Outbound requires `writeback.google_contacts: true` AND explicit per-sync approval.
+**weave.sync.google-contacts** -- Split into two independent jobs. Inbound: Google Contacts → Weave. Outbound: Weave → Google Contacts via BatchUpdateContacts. Staggered 30+ minutes apart to avoid 90 req/min quota contention. Outbound requires `writeback.google_contacts: true` in config — no per-sync approval step. Read `references/connectors.md` before any sync.
 
 **weave.sync.clay** -- Bidirectional sync with Clay. Read `references/connectors.md`. Clay is enrichment source — Weave provenance wins conflicts. Outbound requires `writeback.clay: true` AND explicit approval.
 
@@ -197,6 +308,37 @@ After every Weave command that reads or writes data:
 
 Every written fact requires: `source_type` (direct / inferred / imported / user-stated), `source_ref`, `record_time` (ISO 8601), `confidence` (0.0–1.0). Use `event_time` when the real-world occurrence has a distinct time. Never write facts without provenance.
 
+
+## Contact Enrichment Lifecycle
+
+When enriching a contact, follow this strict order:
+
+1. **Read** — Query Weave for the existing Person record. Confirm the record exists before any enrichment.
+2. **Search** — Use the searchx skill (SearXNG via `execute_code`) for web research. If SearchX is not available, fallback to the native `web_search` tool.
+3. **Enrich** — Add new Facts, Preferences, and relationship edges with full provenance (`source_type`, `source_ref`, `confidence`, `record_time`) on every write.
+4. **Write** — Persist changes to Weave via `MERGE` on Person nodes and `CREATE` on Fact/Preference nodes. Always read back after write to confirm success.
+5. **Search again** — With newly enriched data (company names, locations, titles), construct follow-up searches to find deeper information.
+6. **Sync** — After every Weave write that touches data mapped in `references/google-field-map.md`, immediately sync to Google Contacts. Never update one without mirroring the other.
+
+### Implicit Data from User Language
+
+When the user refers to a person using pronouns (him/her, his/hers, they/them) or relationship terms (wife, husband, partner, brother, son, daughter, etc.), always extract and store these as high-confidence Facts (`source_type: 'user-stated'`, `confidence: 0.99`). This includes pronouns, relationship labels, and any other implicit signals in the user's word choices.
+
+### Google Contacts Sync Rules
+
+- Every field goes in its proper structured field: `name→names`, `email→emailAddresses`, `phone→phoneNumbers`, `org→organizations.name`, `title→organizations.title`, `city/region→addresses`, `birthday→birthdays({date:{month,day}})`, `relation→relations({person:"Plain Text Name",type:"spouse"})`, `URL→urls(type:"LinkedIn"/"Website"/"Instagram")`.
+- NEVER dump structured data into notes/biographies.
+- The `relations.person` field is **plain text name**, NOT a Google resource ID.
+- ALWAYS sync Google Contacts when Weave is updated, and vice versa. Never perform a unilateral write.
+- Uses `camelCase` field names in the Google People API (e.g., `givenName`, `familyName`, not `given_name`).
+- Always `GET` the contact first to retrieve the `etag`, then `PATCH` with the etag + changed fields.
+- `updatePersonFields` query param must list every field being updated.
+- Birthday format: `{"date": {"month": M, "day": D}}`, no year if unknown.
+- URL `type` field uses labels: `"LinkedIn"`, `"Website"`, `"Instagram"`, not `"work"/"home"`.
+
+### Accuracy over Assumption
+
+When a tool call fails or an API returns an error, do not assume the feature is impossible or unsupported. Investigate the exact API specification, test alternative field names (e.g., `camelCase` vs `snake_case`), and verify the endpoint before concluding a capability is missing.
 
 ## Constraints
 
@@ -280,10 +422,14 @@ On first invocation of any Weave command, `_open_db()` handles auto-initializati
 | Job name | Mechanism | Schedule | Command |
 |---|---|---|---|
 | `weave:update` | cron | `0 0 * * *` (midnight daily) | `weave.update` |
+| `weave:sync-google-inbound` | cron | `0 4 * * *` (4AM UTC) | `python3 {skill_root}/scripts/weave_sync_inbound.py` |
+| `weave:sync-google-outbound` | cron | `30 4 * * *` (4:30AM UTC) | `python3 {skill_root}/scripts/weave_sync_outbound.py` |
 
-```
-# Task declared in SKILL.md frontmatter metadata.{platform}.cron
-```
+Stagger inbound and outbound by 30+ minutes to prevent quota contention on the 90 req/min Google People API ceiling.
+
+The `weave:sync-google-inbound` job reads all Google Contacts and gap-fills Weave. The `weave:sync-google-outbound` job pushes Weave changes to Google using BatchUpdateContacts to minimize API calls.
+
+Manual invocation (`weave.sync.google-contacts`) runs both in sequence via `/root/.hermes/scripts/weave_google_bidirectional_sync.py`.
 
 
 ## Self-update
@@ -309,22 +455,41 @@ On first invocation of any Weave command, `_open_db()` handles auto-initializati
 
 ## Google Contacts sync
 
-Weave can be populated from Google Contacts via an inbound sync. Match contacts by `google_resource_name`, then email, then phone. Never match on name alone — risk of false duplicates is high.
+Weave maintains bidirectional sync with Google Contacts via two separate scripts (inbound and outbound run as independent cron jobs, staggered 30+ minutes apart to avoid quota contention):
+
+- Inbound: `scripts/weave_sync_inbound.py` — Google Contacts → Weave
+- Outbound: `scripts/weave_sync_outbound.py` — Weave → Google Contacts
+
+**Why separate jobs?** Both inbound (paginated list of ALL contacts) and outbound (per-contact PATCH + etag GET) consume from the same 90 req/min Google People API quota. Running them sequentially causes cascading 429s. Staggering by 30+ minutes lets the quota window reset between runs.
+
+**Inbound:** Google Contacts → Weave. Match by `google_resource_name`, then email, then phone. Never match on name alone. Gap-fill only — Weave provenance wins. Two-pass: read-only lookup maps first, then write pass.
+
+**Outbound:** Weave → Google Contacts. Records modified since `last_sync.google_contacts` get PATCHed back to Google via `BatchUpdateContacts` (halves API consumption). Requires `writeback.google_contacts: true` in config. No per-sync approval step.
 
 **OAuth scopes required:**
-- Read-only: `https://www.googleapis.com/auth/contacts.readonly`
-- Full (incl. Other Contacts): `contacts` + `contacts.readonly` + `contacts.other.readonly`
-- Write-back to Google: `contacts` scope + explicit per-sync user approval
+- Read: `contacts` + `contacts.readonly` + `contacts.other.readonly`
+- Write-back: `contacts` scope
+
+**Google People API quota (hard-won, Apr 2026):**
+- `Critical read requests`: 90 req/min per user per project
+- **Both GET (etag fetch) and PATCH (update) count against this same 90/min bucket**
+- Outbound uses 2 API calls per contact (GET etag + PATCH) — at 90/min ceiling, that allows ~45 contacts/min
+- **Use `BatchUpdateContacts` for outbound** — up to 200 contacts per batch request, reducing 2N calls to N/200 calls
+- Recommended sleep between batches: 1.5s. Between individual PATCHes (if not batching): 1.3s minimum
+- **Rate limit backoff must start at 5s minimum**, not 0.5s — starting too aggressive causes cascading 429s without giving the quota window time to clear
+- On 429: exponential backoff starting at 5s, doubling per retry up to 4 attempts
+- On 502 (Google server error): retry once after 5s, then mark failed
+- On 404: contact was deleted from Google — clear `google_resource_name` in Weave so future syncs don't retry
 
 **Known pitfalls:**
 - `otherContacts()` API is unreliable — use REST with `contacts.other.readonly` scope instead
 - `expiry` field in token may be ISO string or integer; handle both
 - Scope expansion always requires re-auth with `prompt=consent&access_type=offline`
 - Bulk imports (>100 rows) should use `COPY FROM` not individual inserts
-- Phone numbers may arrive with malformed leading `1` (e.g. `+1 (141)...`) — validate before storing
 - Provenance for imported contacts: `source_type='imported'`, `confidence=0.8`
-
-**Write-back:** Requires `writeback.google_contacts: true` in config.json AND explicit user approval per sync. Never write back without both.
+- Outbound PATCH requires current etag from Google — fetch etag before update
+- Phone numbers may arrive with malformed leading `1` (e.g. `+1 (141)...`) — validate before storing
+- **Token path**: use `/root/.hermes/google_token.json` for Jared's contacts (Jared is the Google Contacts account owner, not Indigo)
 
 
 ## Visibility

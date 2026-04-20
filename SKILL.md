@@ -224,7 +224,13 @@ Key mistake to avoid: Using `row['name']` on a list row from column selectors wi
           raise
   ```
 - **End-of-results exception**: `r.get_next()` raises `Runtime exception: No more tuples in QueryResult` when exhausted — NOT `StopIteration`. Always check for this string in exception handlers. The pattern `"No more tuples" in str(e)` distinguishes it from data corruption errors.
-- **Import pattern**: `from real_ladybug import Database` (top-level). `READ_ONLY`/`READ_WRITE` constants are NOT exported from `real_ladybug` — use `Database(path, read_only=True)` parameter instead. Connection: `lb.Connection(db)` then `conn.execute(cypher, params)`.
+- **Import pattern**: `from real_ladybug import Database, Connection` (top-level). There is NO `lb` submodule — both `Database` and `Connection` are exported directly. `READ_ONLY`/`READ_WRITE` constants are NOT exported — use `Database(path, read_only=True)` parameter instead. Connection: `Connection(db)` then `conn.execute(cypher, params)`.
+  ```python
+  from real_ladybug import Database, Connection
+  db = Database("/path/to/weave.lbug", read_only=True)
+  conn = Connection(db)
+  r = conn.execute("MATCH (p:Person) RETURN p.id, p.name LIMIT 5")
+  ```
 - **No `randomUUID()` in Cypher**: LadybugDB does not support `randomUUID()`. Generate UUIDs in Python with `uuid.uuid4()` and pass as parameters: `CREATE (f:Fact {id: $fact_id, ...})`. Always generate IDs on the Python side, never in Cypher expressions.
 
 ## Storage layout

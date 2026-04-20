@@ -466,7 +466,9 @@ Script: `/root/.hermes/scripts/overnight_weave_enrichment.py`
 Logs: `/root/.hermes/data/weave-enrichment/run.log`
 Progress: `/root/.hermes/data/weave-enrichment/progress.jsonl`
 
-**Re-processing pitfall**: The progress file tracks all contacted person IDs, but ~65% of searches return "no extractable data." If the filter excludes ALL progress-file IDs permanently, contacts that failed enrichment are never retried. Fix: only skip IDs that have `fields` (non-empty list) in the progress entry — contacts with empty `fields` should be re-attempted on subsequent runs since different search queries may yield results.
+**Re-processing pitfall**: The progress file tracks all contacted person IDs, but ~65% of searches return "no extractable data." If the filter excludes ALL progress-file IDs permanently, contacts that failed enrichment are never retried.
+
+**Do NOT filter by progress file at all.** The enrichment logic (`enrich_weave_contact`) only fills fields that are currently NULL/empty in the database — writing the same value twice is harmless. Filtering by progress entries caused a bug (Apr 2026): contacts with partial enrichment (e.g., `location_city` found, but `org` and `occupation` still missing) were permanently excluded because they had a non-empty `fields` entry in progress.jsonl. The simplest correct approach: query contacts with gaps directly from the database, skip no one, and let the SET clause only fill what's missing. The progress file should be used for logging/monitoring only, not for filtering candidates.
 
 
 ## Self-update

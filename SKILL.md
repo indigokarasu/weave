@@ -116,7 +116,8 @@ Use `sync_id` from `sync_history.jsonl` to delete new records or revert enriched
 
 ### Pitfalls
 - **Other Contacts API**: `people_api.otherContacts()` is unreliable; use REST with `contacts.other.readonly`.
-- **REST API Preference**: Use `urllib.request` as `googleapiclient` is missing in `execute_code` sandbox.
+- **REST API Preference**: Use `urllib.request` as `googleapiclient` is missing in `execute_code` sandbox. Additionally, `googleapiclient.discovery.build` causes silent hangs (no output, no error) when run via `execute_code` or `terminal` background processes — always use `urllib.request` REST calls for Google People API.
+- **sources enum**: The `sources` query parameter for People API connections must be `READ_SOURCE_TYPE_CONTACT` (not `READ_SOURCE_CONTACT`). This matters when calling the REST API directly.
 - **Name Enrichment**: Incremental syncs typically focus on filling `name_given` and `name_family`.
 - **Token Expiry**: `expiry` field can be ISO string or integer; handle both.
 - **Scope Expansion**: Requires re-auth with `prompt=consent&access_type=offline`.
@@ -203,6 +204,34 @@ When querying Weave via LadybugDB (`real_ladybug`), the return format depends on
 - **`r.get_column_names()`** works for all queries and returns a list of column name strings.
 
 Key mistake to avoid: Using `row['name']` on a list row from column selectors will raise `TypeError: list indices must be integers or slices, not str`. Always match your access pattern to the return format.
+
+### Iteration Pitfalls (discovered Apr 2026)
+
+- **`r.get_all()` fails on corrupt rows**: If any row contains corrupted/invalid UTF-8 data, `get_all()` raises `UnicodeDecodeError` and returns NOTHING — even if 99% of rows are valid. For queries over the full Person table, use row-by-row iteration with error handling instead:
+  ```python
+  rows = []
+  while True:
+      try:
+          row = r.get_next()
+          rows.append(row)
+      except StopIteration:
+          break
+      except Exception as e:
+          if "No more tuples" in str(e):
+              break  # LadybugDB raises this instead of StopIteration
+          if "utf-8" in str(e):
+              continue  # Skip corrupt row
+          raise
+  ```
+- **End-of-results exception**: `r.get_next()` raises `Runtime exception: No more tuples in QueryResult` when exhausted — NOT `StopIteration`. Always check for this string in exception handlers. The pattern `"No more tuples" in str(e)` distinguishes it from data corruption errors.
+- **Import pattern**: `from real_ladybug import Database, Connection` (top-level). There is NO `lb` submodule — both `Database` and `Connection` are exported directly. `READ_ONLY`/`READ_WRITE` constants are NOT exported — use `Database(path, read_only=True)` parameter instead. Connection: `Connection(db)` then `conn.execute(cypher, params)`.
+  ```python
+  from real_ladybug import Database, Connection
+  db = Database("/path/to/weave.lbug", read_only=True)
+  conn = Connection(db)
+  r = conn.execute("MATCH (p:Person) RETURN p.id, p.name LIMIT 5")
+  ```
+- **No `randomUUID()` in Cypher**: LadybugDB does not support `randomUUID()`. Generate UUIDs in Python with `uuid.uuid4()` and pass as parameters: `CREATE (f:Fact {id: $fact_id, ...})`. Always generate IDs on the Python side, never in Cypher expressions.
 
 ## Storage layout
 
@@ -431,6 +460,16 @@ The `weave:sync-google-inbound` job reads all Google Contacts and gap-fills Weav
 
 Manual invocation (`weave.sync.google-contacts`) runs both in sequence via `/root/.hermes/scripts/weave_google_bidirectional_sync.py`.
 
+### Overnight Enrichment Pipeline
+
+Script: `/root/.hermes/scripts/overnight_weave_enrichment.py`
+Logs: `/root/.hermes/data/weave-enrichment/run.log`
+Progress: `/root/.hermes/data/weave-enrichment/progress.jsonl`
+
+**Re-processing pitfall**: The progress file tracks all contacted person IDs, but ~65% of searches return "no extractable data." If the filter excludes ALL progress-file IDs permanently, contacts that failed enrichment are never retried.
+
+**Do NOT filter by progress file at all.** The enrichment logic (`enrich_weave_contact`) only fills fields that are currently NULL/empty in the database — writing the same value twice is harmless. Filtering by progress entries caused a bug (Apr 2026): contacts with partial enrichment (e.g., `location_city` found, but `org` and `occupation` still missing) were permanently excluded because they had a non-empty `fields` entry in progress.jsonl. The simplest correct approach: query contacts with gaps directly from the database, skip no one, and let the SET clause only fill what's missing. The progress file should be used for logging/monitoring only, not for filtering candidates.
+
 
 ## Self-update
 
@@ -490,6 +529,49 @@ Weave maintains bidirectional sync with Google Contacts via two separate scripts
 - Outbound PATCH requires current etag from Google — fetch etag before update
 - Phone numbers may arrive with malformed leading `1` (e.g. `+1 (141)...`) — validate before storing
 - **Token path**: use `/root/.hermes/google_token.json` for Jared's contacts (Jared is the Google Contacts account owner, not Indigo)
+- **execute_code timeout**: The full `weave_google_bidirectional_sync.py` script times out in `execute_code` (300s limit) when outbound has 200+ contacts (2 API calls × 1.3s sleep each). Manual sync workaround: run as background process via `terminal(background=true)` with `notify_on_complete=true`. The script handles its own checkpointing. Cron jobs don't have this issue since they run outside `execute_code`.
+- **Manual sync via background process**: When invoking `weave_google_bidirectional_sync.py` manually, always use `terminal(background=true, notify_on_complete=true, timeout=600)` — do NOT use `execute_code` (300s cap) or foreground `terminal` (blocks agent). The script takes ~280s for ~900 contacts (inbound ~90s, outbound ~190s). If the process needs to be monitored, check the checkpoint file size: `wc -l staging/outbound_ckpt.txt` — each line is a pushed `google_resource_name`. **If the process is killed (exit 143 SIGTERM or 137 SIGKILL)**, this is usually memory pressure from the real_ladybug C extension (~500-800MB RSS with 900+ contacts). The checkpoint system survives kills — just clear the LadybugDB lock (see "LadybugDB lock not released after process kill" below), re-run, and it resumes automatically.
+- **Multi-run resilience**: The script's checkpoint system (`staging/outbound_ckpt.txt`) survives process kills and restarts. If interrupted mid-outbound, re-running the script resumes from the last pushed contact. Example: 571 contacts pushed across 3 runs (150 + 50 + 471) without data loss or duplication. On successful completion, the checkpoint file is deleted automatically.
+- **Process spawning**: The Python script spawns a child process (real_ladybug C extension). You'll see two PIDs: parent (bash shell, `do_wait`) and child (python3, doing actual work). This is normal — do not kill the child thinking it's a duplicate.
+- **Output buffering**: When run as background process, stdout appears empty for 90-120+ seconds despite the script actively working. The `import real_ladybug` (21MB C extension) and initial database query take significant time before the first `_log()` output appears. Monitor progress via `ps aux | grep weave_google`, `/proc/<pid>/wchan`, or `ss -tnp | grep <pid>` (for active API calls). Do NOT kill the process thinking it's hung — check checkpoint file or process CPU usage first.
+- **Do NOT use SIGUSR1**: Sending `kill -USR1` to the Python process causes it to crash with `RuntimeError` (no traceback handler installed). Use `/proc/<pid>/wchan`, `ss -tnp`, and checkpoint file inspection for diagnostics instead.
+- **LadybugDB lock not released after process kill**: When the sync process is killed (SIGTERM/SIGKILL, exit codes 143/137), the LadybugDB file lock on `weave.lbug` can remain held by orphaned child processes. The next run fails with `RuntimeError: IO exception: Could not set lock on file`. **Diagnosis**: `fuser -v /root/.hermes/commons/db/ocas-weave/weave.lbug` shows which PID holds the lock. **Fix**:
+  ```bash
+  fuser -v /root/.hermes/commons/db/ocas-weave/weave.lbug 2>&1
+  # Kill the orphaned process
+  kill -9 <PID> 2>/dev/null
+  # Clean up stale .wal file
+  rm -f /root/.hermes/commons/db/ocas-weave/weave.lbug.wal
+  # Verify lock is released
+  fuser /root/.hermes/commons/db/ocas-weave/weave.lbug
+  # Then retry the sync
+  ```
+  **Warning**: Multiple processes may need killing — `fuser` only shows one at a time. Kill, re-check, repeat until `fuser` returns empty. The `.wal` file from a killed process is always stale; removing it is safe. The script will re-create it on next run.
+- **Stale etags on BatchUpdateContacts after multi-run resume**: When the sync process is killed and restarted multiple times, the script loads all modified contacts at startup (including their current Google etags). But on resume, contacts already in the checkpoint are filtered out. For contacts NOT yet pushed, the etags loaded at script start may become stale if those contacts were modified on Google between runs. **Symptom**: HTTP 400 with `FAILED_PRECONDITION: Request must set person.etag or person.metadata.sources.etag`. **Fix**: Re-run the sync again — the next invocation re-fetches fresh etags for all remaining contacts. The checkpoint system skips already-pushed contacts, so only the stale-etag contacts are retried with fresh etags.
+- **Token expiry mid-run (silent refresh failure)**: The script's `get_access_token()` function has internal refresh logic, but it can fail silently — the refresh call may throw an exception that gets caught and logged to stdout (which is buffered for 90-120s), causing the script to fall through and return the expired token. When this happens, inbound succeeds (token was still valid) but outbound fails with HTTP 401 on most contacts. **Symptom**: Pushed ~118, Failed ~463, all 401s. **Fix**: Manually refresh the token before retrying:
+  ```python
+  python3 -c "
+  import json, urllib.request, urllib.parse
+  from datetime import datetime, timezone, timedelta
+  with open('/root/.hermes/google_token.json') as f:
+      td = json.load(f)
+  resp = urllib.request.urlopen(urllib.request.Request(
+      'https://oauth2.googleapis.com/token',
+      data=urllib.parse.urlencode({
+          'client_id': td['client_id'],
+          'client_secret': td['client_secret'],
+          'refresh_token': td['refresh_token'],
+          'grant_type': 'refresh_token'
+      }).encode()))
+  new = json.loads(resp.read())
+  td['token'] = new['access_token']
+  td['expiry'] = (datetime.now(timezone.utc) + timedelta(seconds=new['expires_in'])).isoformat()
+  with open('/root/.hermes/google_token.json', 'w') as f:
+      json.dump(td, f, indent=2)
+  print('Token refreshed, expires:', td['expiry'])
+  "
+  ```
+  Then re-run the sync script. The checkpoint system (`staging/outbound_ckpt.txt`) ensures the retry picks up where it left off — no duplicate pushes. **Why this works**: The refresh_token itself is valid; the issue is the script's internal refresh logic failing, not the credentials being revoked.
 
 
 ## Visibility

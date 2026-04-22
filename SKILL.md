@@ -11,7 +11,7 @@ description: >
 metadata:
   author: Indigo Karasu
   email: mx.indigo.karasu@gmail.com
-  version: "3.1.0"
+  version: "3.2.0"
   hermes:
     tags: [social-graph, people, relationships]
     category: memory
@@ -119,7 +119,10 @@ Use `sync_id` from `sync_history.jsonl` to delete new records or revert enriched
 - **REST API Preference**: Use `urllib.request` as `googleapiclient` is missing in `execute_code` sandbox. Additionally, `googleapiclient.discovery.build` causes silent hangs (no output, no error) when run via `execute_code` or `terminal` background processes — always use `urllib.request` REST calls for Google People API.
 - **sources enum**: The `sources` query parameter for People API connections must be `READ_SOURCE_TYPE_CONTACT` (not `READ_SOURCE_CONTACT`). This matters when calling the REST API directly.
 - **Name Enrichment**: Incremental syncs typically focus on filling `name_given` and `name_family`.
-- **Token Expiry**: `expiry` field can be ISO string or integer; handle both.
+- **Stale resource names**: If a GET on `people/{resourceName}` returns 404, the resource name in Weave is stale. Re-match via `people:searchContacts` or refresh from inbound sync before pushing.
+- **Correct update endpoint**: Use `{resourceName}:updateContact` (not `{resourceName}`) for PATCH updates.
+- **Top-level etag**: Use the top-level `etag` field from the GET response, NOT `metadata.sources[0].etag`. The source etag causes `FAILED_PRECONDITION`.
+- **Social profiles from notes**: Extract `notes.social_profiles` JSON and push each `{platform, url}` as `urls` entries with `type` set to the platform name.
 - **Scope Expansion**: Requires re-auth with `prompt=consent&access_type=offline`.
 - **False Duplicates**: Never match on name alone.
 - **Provenance**: Use `source_type='imported'`, `source_ref=<resourceName>`, `confidence=0.8`.
@@ -300,7 +303,7 @@ Read `references/init_pattern.md` for the `_open_db` implementation pattern. Ful
 
 **weave.export** -- Export data to staging dir via `COPY TO`. Read `references/import_export.md`.
 
-**weave.sync.google-contacts** -- Split into two independent jobs. Inbound: Google Contacts → Weave. Outbound: Weave → Google Contacts via BatchUpdateContacts. Staggered 30+ minutes apart to avoid 90 req/min quota contention. Outbound requires `writeback.google_contacts: true` in config — no per-sync approval step. Read `references/connectors.md` before any sync.
+**weave.sync.google-contacts** -- Split into two independent jobs. Inbound: Google Contacts → Weave. Outbound: Weave → Google Contacts via BatchUpdateContacts (200 per batch, with batchGet for etags). **MUST snapshot contacts before outbound push** (see references/connectors.md). Staggered 30+ minutes apart to avoid 90 req/min quota contention. Outbound requires `writeback.google_contacts: true` in config — no per-sync approval step. Read `references/connectors.md` before any sync.
 
 **weave.sync.clay** -- Bidirectional sync with Clay. Read `references/connectors.md`. Clay is enrichment source — Weave provenance wins conflicts. Outbound requires `writeback.clay: true` AND explicit approval.
 
@@ -368,6 +371,21 @@ When the user refers to a person using pronouns (him/her, his/hers, they/them) o
 ### Accuracy over Assumption
 
 When a tool call fails or an API returns an error, do not assume the feature is impossible or unsupported. Investigate the exact API specification, test alternative field names (e.g., `camelCase` vs `snake_case`), and verify the endpoint before concluding a capability is missing.
+
+### Data Integrity Safeguards
+
+**NEVER push Weave data to external systems without validation.** Web enrichment has produced corrupted data (Apr 2026):
+- Truncated occupation fields (missing first characters, e.g., "r Vice President" instead of "Senior Vice President")
+- Fragment org fields (e.g., "St" instead of "Stanford")
+- Full bios stored in occupation field
+- Job titles in city field
+
+Before any outbound sync:
+1. Run validation to catch fragment/truncated fields
+2. Clear invalid fields rather than pushing bad data
+3. **Always snapshot Google Contacts first** (see references/connectors.md)
+
+**Enrichment scraper bug**: The overnight enrichment scraper occasionally extracts substrings incorrectly, storing truncated text. If this happens, clear the corrupted fields and fix the scraper before re-running enrichment.
 
 ## Constraints
 
@@ -503,7 +521,9 @@ Weave maintains bidirectional sync with Google Contacts via two separate scripts
 
 **Inbound:** Google Contacts → Weave. Match by `google_resource_name`, then email, then phone. Never match on name alone. Gap-fill only — Weave provenance wins. Two-pass: read-only lookup maps first, then write pass.
 
-**Outbound:** Weave → Google Contacts. Records modified since `last_sync.google_contacts` get PATCHed back to Google via `BatchUpdateContacts` (halves API consumption). Requires `writeback.google_contacts: true` in config. No per-sync approval step.
+**Outbound:** Weave → Google Contacts. Records modified since `last_sync.google_contacts` get pushed via `BatchUpdateContacts` (200 contacts per batch). Etags fetched via `people:batchGet` (50 per request) right before batch update to avoid stale etags. Requires `writeback.google_contacts: true` in config. No per-sync approval step. **MUST snapshot contacts before pushing** (see references/connectors.md).
+
+**Full field sync (mandatory):** Outbound MUST sync ALL fields from `references/google-field-map.md`, not just name/org/title/city/email. This includes: names (given, family, display), emailAddresses, phoneNumbers, organizations (name + title), addresses (city + countryCode), birthdays (from Fact nodes), urls (linkedin, website, instagram from Fact nodes), and relations (spouse from Knows edges). The sync script must query Facts and Knows relationships separately and merge them into the PATCH body. A partial sync that skips mapped fields is incorrect — every mapped Weave field must be reflected in Google.
 
 **OAuth scopes required:**
 - Read: `contacts` + `contacts.readonly` + `contacts.other.readonly`
@@ -527,7 +547,11 @@ Weave maintains bidirectional sync with Google Contacts via two separate scripts
 - Bulk imports (>100 rows) should use `COPY FROM` not individual inserts
 - Provenance for imported contacts: `source_type='imported'`, `confidence=0.8`
 - Outbound PATCH requires current etag from Google — fetch etag before update
-- Phone numbers may arrive with malformed leading `1` (e.g. `+1 (141)...`) — validate before storing
+- **Top-level etag**: Use the top-level `etag` field from the GET response, NOT `metadata.sources[0].etag`. The source etag causes `FAILED_PRECONDITION`.
+- **Stale resource names**: If a GET on `people/{resourceName}` returns 404, the resource name in Weave is stale. Re-match via `people:searchContacts` or refresh from inbound sync before pushing.
+- **Correct update endpoint**: Use `{resourceName}:updateContact` (not `{resourceName}`) for PATCH updates.
+- **Social profiles from notes**: Extract `notes.social_profiles` JSON and push each `{platform, url}` as `urls` entries with `type` set to the platform name.
+- **Phone numbers may arrive with malformed leading `1`** (e.g. `+1 (141)...`) — validate before storing
 - **Token path**: use `<hermes-root>/google_token.json` for owner's contacts (owner is the Google Contacts account owner, not Indigo)
 - **execute_code timeout**: The full `weave_google_bidirectional_sync.py` script times out in `execute_code` (300s limit) when outbound has 200+ contacts (2 API calls × 1.3s sleep each). Manual sync workaround: run as background process via `terminal(background=true)` with `notify_on_complete=true`. The script handles its own checkpointing. Cron jobs don't have this issue since they run outside `execute_code`.
 - **Manual sync via background process**: When invoking `weave_google_bidirectional_sync.py` manually, always use `terminal(background=true, notify_on_complete=true, timeout=600)` — do NOT use `execute_code` (300s cap) or foreground `terminal` (blocks agent). The script takes ~280s for ~900 contacts (inbound ~90s, outbound ~190s). If the process needs to be monitored, check the checkpoint file size: `wc -l staging/outbound_ckpt.txt` — each line is a pushed `google_resource_name`. **If the process is killed (exit 143 SIGTERM or 137 SIGKILL)**, this is usually memory pressure from the real_ladybug C extension (~500-800MB RSS with 900+ contacts). The checkpoint system survives kills — just clear the LadybugDB lock (see "LadybugDB lock not released after process kill" below), re-run, and it resumes automatically.
@@ -547,7 +571,9 @@ Weave maintains bidirectional sync with Google Contacts via two separate scripts
   # Then retry the sync
   ```
   **Warning**: Multiple processes may need killing — `fuser` only shows one at a time. Kill, re-check, repeat until `fuser` returns empty. The `.wal` file from a killed process is always stale; removing it is safe. The script will re-create it on next run.
-- **Stale etags on BatchUpdateContacts after multi-run resume**: When the sync process is killed and restarted multiple times, the script loads all modified contacts at startup (including their current Google etags). But on resume, contacts already in the checkpoint are filtered out. For contacts NOT yet pushed, the etags loaded at script start may become stale if those contacts were modified on Google between runs. **Symptom**: HTTP 400 with `FAILED_PRECONDITION: Request must set person.etag or person.metadata.sources.etag`. **Fix**: Re-run the sync again — the next invocation re-fetches fresh etags for all remaining contacts. The checkpoint system skips already-pushed contacts, so only the stale-etag contacts are retried with fresh etags.
+- **Stale etags on BatchUpdateContacts after multi-run resume**: When the sync process is killed and restarted multiple times, the script loads all modified contacts at startup (including their current Google etags). But on resume, contacts already in the checkpoint are filtered out. For contacts NOT yet pushed, the etags loaded at script start may become stale if those contacts were modified on Google between runs. **Symptom**: HTTP 400 with `FAILED_PRECONDITION: Request must set person.etag or person.metadata.sources.etag`. **Fix**: Re-run the sync again — the next invocation re-fetches fresh etags for all remaining contacts. The checkpoint system skips already-pushed contacts, so only the stale-etag contacts are retried with fresh etags. **Better fix**: Always use `people:batchGet` to fetch fresh etags right before batch update, not at script startup.
+- **BatchUpdateContacts empty response**: The API may return HTTP 200 with empty body `{}` instead of `updateResult`. Empty response = all contacts updated successfully. Must handle both cases in code.
+- **Batch etag fetching with people:batchGet**: Fetch 50 etags per request vs individual GETs. For 580 contacts: 12 batch GETs (50 each) + 3 batch updates (200 each) = 15 API calls vs 1162 individual calls.
 - **Token expiry mid-run (silent refresh failure)**: The script's `get_access_token()` function has internal refresh logic, but it can fail silently — the refresh call may throw an exception that gets caught and logged to stdout (which is buffered for 90-120s), causing the script to fall through and return the expired token. When this happens, inbound succeeds (token was still valid) but outbound fails with HTTP 401 on most contacts. **Symptom**: Pushed ~118, Failed ~463, all 401s. **Fix**: Manually refresh the token before retrying:
   ```python
   python3 -c "

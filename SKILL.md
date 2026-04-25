@@ -11,13 +11,13 @@ description: >
 metadata:
   author: Indigo Karasu
   email: mx.indigo.karasu@gmail.com
-  version: "3.2.0"
+  version: "3.3.0"
   hermes:
     tags: [social-graph, people, relationships]
     category: memory
     cron:
       - name: "weave:update"
-        schedule: "0 0 * * *"
+        schedule: "25 7 * * *"
         command: "weave.update"
   openclaw:
     skill_type: system
@@ -47,7 +47,7 @@ metadata:
           required: false
     cron:
       - name: "weave:update"
-        schedule: "0 0 * * *"
+        schedule: "25 7 * * *"
         command: "weave.update"
 ---
 
@@ -108,8 +108,7 @@ Google OAuth token at `<hermes-root>/google_token.json`. Client ID is `<GOOGLE_O
 5. **Track Changes**: Write to `<hermes-root>/data/hermes-weave/sync_history.jsonl`.
 6. **Update Config**: Update `last_sync` in `config.json`.
 
-### Write-Back (Outbound)
-Requires `writeback.google_contacts: true` in config.json AND explicit per-sync user approval.
+[{'resourceName}': 'updateContact` (NOT `{resourceName'}, [0]]
 
 ### Undo
 Use `sync_id` from `sync_history.jsonl` to delete new records or revert enriched fields.
@@ -303,7 +302,7 @@ Read `references/init_pattern.md` for the `_open_db` implementation pattern. Ful
 
 **weave.export** -- Export data to staging dir via `COPY TO`. Read `references/import_export.md`.
 
-**weave.sync.google-contacts** -- Split into two independent jobs. Inbound: Google Contacts → Weave. Outbound: Weave → Google Contacts via BatchUpdateContacts (200 per batch, with batchGet for etags). **MUST snapshot contacts before outbound push** (see references/connectors.md). Staggered 30+ minutes apart to avoid 90 req/min quota contention. Outbound requires `writeback.google_contacts: true` in config — no per-sync approval step. Read `references/connectors.md` before any sync.
+**weave.sync.google-contacts** -- Run bidirectional Google Contacts sync. Inbound: Google Contacts → Weave. Outbound: Weave → Google Contacts via BatchUpdateContacts (200 per batch, with batchGet for etags). **MUST snapshot contacts before outbound push** (see references/connectors.md). Outbound requires `writeback.google_contacts: true` in config — no per-sync approval step. Read `references/connectors.md` before any sync.
 
 **weave.sync.clay** -- Bidirectional sync with Clay. Read `references/connectors.md`. Clay is enrichment source — Weave provenance wins conflicts. Outbound requires `writeback.clay: true` AND explicit approval.
 
@@ -574,6 +573,30 @@ Weave maintains bidirectional sync with Google Contacts via two separate scripts
 - **Stale etags on BatchUpdateContacts after multi-run resume**: When the sync process is killed and restarted multiple times, the script loads all modified contacts at startup (including their current Google etags). But on resume, contacts already in the checkpoint are filtered out. For contacts NOT yet pushed, the etags loaded at script start may become stale if those contacts were modified on Google between runs. **Symptom**: HTTP 400 with `FAILED_PRECONDITION: Request must set person.etag or person.metadata.sources.etag`. **Fix**: Re-run the sync again — the next invocation re-fetches fresh etags for all remaining contacts. The checkpoint system skips already-pushed contacts, so only the stale-etag contacts are retried with fresh etags. **Better fix**: Always use `people:batchGet` to fetch fresh etags right before batch update, not at script startup.
 - **BatchUpdateContacts empty response**: The API may return HTTP 200 with empty body `{}` instead of `updateResult`. Empty response = all contacts updated successfully. Must handle both cases in code.
 - **Batch etag fetching with people:batchGet**: Fetch 50 etags per request vs individual GETs. For 580 contacts: 12 batch GETs (50 each) + 3 batch updates (200 each) = 15 API calls vs 1162 individual calls.
+- **Refresh token expired/revoked (invalid_grant)**: The refresh token itself can become invalid (HTTP 400 `{"error": "invalid_grant", "error_description": "Token has been expired or revoked."}`). This is **different** from the silent refresh failure below — the refresh token is permanently dead and cannot be refreshed. **Causes**: User revoked app access, Google invalidated the token, or token was generated without `access_type=offline`. **Fix**: Full re-auth required — generate a new authorization URL with `access_type=offline&prompt=consent` and all required scopes, exchange the auth code for a new token with a fresh refresh_token. Use this diagnostic:
+  ```python
+  import json, urllib.request, urllib.parse
+  with open('<hermes-root>/google_token.json') as f:
+      td = json.load(f)
+  req = urllib.request.Request(
+      'https://oauth2.googleapis.com/token',
+      data=urllib.parse.urlencode({
+          'client_id': td['client_id'],
+          'client_secret': td['client_secret'],
+          'refresh_token': td['refresh_token'],
+          'grant_type': 'refresh_token'
+      }).encode(),
+      headers={'Content-Type': 'application/x-www-form-urlencoded'}
+  )
+  try:
+      resp = urllib.request.urlopen(req, timeout=30)
+      print('Refresh OK')
+  except urllib.error.HTTPError as e:
+      body = e.read().decode()
+      print(f'HTTP {e.code}: {body}')  # Look for invalid_grant
+  ```
+- **Pre-sync scope verification**: Before attempting any People API call, verify the token's scopes include contacts. The token at `<hermes-root>/google_token.json` may have been generated for Gmail/Calendar/Drive only (missing `contacts`, `contacts.readonly`, `contacts.other.readonly`). Check with: `python3 -c "import json; td=json.load(open('<hermes-root>/google_token.json')); print(td.get('scopes', []))"`. If contacts scopes are missing, the token must be re-authorized with the correct scopes — the old token cannot be patched.
+- **Script file corruption (TOKEN_PATH =***)**: The sync script at `<hermes-root>/scripts/weave_google_bidirectional_sync.py` may have a corrupted line like `TOKEN_PATH=*** / 'google_token.json'` (invalid Python, literal asterisks in source). This appears to be caused by a sed or find-and-replace that targeted `Path.home()` or the actual path and replaced it with `***`. **Fix**: Patch to `TOKEN_PATH = HERMES_HOME / 'google_token.json'`. Always verify the script parses correctly before running: `python3 -c "import ast; ast.parse(open('<hermes-root>/scripts/weave_google_bidirectional_sync.py').read()); print('OK')"`.
 - **Token expiry mid-run (silent refresh failure)**: The script's `get_access_token()` function has internal refresh logic, but it can fail silently — the refresh call may throw an exception that gets caught and logged to stdout (which is buffered for 90-120s), causing the script to fall through and return the expired token. When this happens, inbound succeeds (token was still valid) but outbound fails with HTTP 401 on most contacts. **Symptom**: Pushed ~118, Failed ~463, all 401s. **Fix**: Manually refresh the token before retrying:
   ```python
   python3 -c "

@@ -11,13 +11,13 @@ description: >
 metadata:
   author: Indigo Karasu
   email: mx.indigo.karasu@gmail.com
-  version: "3.1.0"
+  version: "3.3.0"
   hermes:
     tags: [social-graph, people, relationships]
     category: memory
     cron:
       - name: "weave:update"
-        schedule: "0 0 * * *"
+        schedule: "25 7 * * *"
         command: "weave.update"
   openclaw:
     skill_type: system
@@ -47,7 +47,7 @@ metadata:
           required: false
     cron:
       - name: "weave:update"
-        schedule: "0 0 * * *"
+        schedule: "25 7 * * *"
         command: "weave.update"
 ---
 
@@ -98,7 +98,7 @@ Bidirectional sync between Google Contacts and Weave's LadybugDB social graph. I
 | Write-back (outbound) | `contacts` | Requires full scope |
 
 ### Token and OAuth
-Google OAuth token at `<hermes-root>/google_token.json`. Client ID is `<GOOGLE_OAUTH_CLIENT_ID>.apps.googleusercontent.com`.
+Google OAuth credentials at `<hermes-root>/owner_google_credentials.json`. Client ID is `<GOOGLE_OAUTH_CLIENT_ID>.apps.googleusercontent.com`.
 
 ### Inbound Sync Procedure
 1. **Check/Initialize Weave Schema**: Verify database has tables. Refer to `references/schemas.md` for full DDL.
@@ -108,8 +108,7 @@ Google OAuth token at `<hermes-root>/google_token.json`. Client ID is `<GOOGLE_O
 5. **Track Changes**: Write to `<hermes-root>/data/hermes-weave/sync_history.jsonl`.
 6. **Update Config**: Update `last_sync` in `config.json`.
 
-### Write-Back (Outbound)
-Requires `writeback.google_contacts: true` in config.json AND explicit per-sync user approval.
+[{'resourceName}': 'updateContact` (NOT `{resourceName'}, [0]]
 
 ### Undo
 Use `sync_id` from `sync_history.jsonl` to delete new records or revert enriched fields.
@@ -119,7 +118,10 @@ Use `sync_id` from `sync_history.jsonl` to delete new records or revert enriched
 - **REST API Preference**: Use `urllib.request` as `googleapiclient` is missing in `execute_code` sandbox. Additionally, `googleapiclient.discovery.build` causes silent hangs (no output, no error) when run via `execute_code` or `terminal` background processes — always use `urllib.request` REST calls for Google People API.
 - **sources enum**: The `sources` query parameter for People API connections must be `READ_SOURCE_TYPE_CONTACT` (not `READ_SOURCE_CONTACT`). This matters when calling the REST API directly.
 - **Name Enrichment**: Incremental syncs typically focus on filling `name_given` and `name_family`.
-- **Token Expiry**: `expiry` field can be ISO string or integer; handle both.
+- **Stale resource names**: If a GET on `people/{resourceName}` returns 404, the resource name in Weave is stale. Re-match via `people:searchContacts` or refresh from inbound sync before pushing.
+- **Correct update endpoint**: Use `{resourceName}:updateContact` (not `{resourceName}`) for PATCH updates.
+- **Top-level etag**: Use the top-level `etag` field from the GET response, NOT `metadata.sources[0].etag`. The source etag causes `FAILED_PRECONDITION`.
+- **Social profiles from notes**: Extract `notes.social_profiles` JSON and push each `{platform, url}` as `urls` entries with `type` set to the platform name.
 - **Scope Expansion**: Requires re-auth with `prompt=consent&access_type=offline`.
 - **False Duplicates**: Never match on name alone.
 - **Provenance**: Use `source_type='imported'`, `source_ref=<resourceName>`, `confidence=0.8`.
@@ -172,7 +174,7 @@ Orchestrates a multi-phase pipeline to enrich the personal social graph (Weave) 
   - Use `CREATE` for relationship properties (not `MERGE` with inline props).
   - Create two directed edges for bidirectional relations.
   - Use `org` and `occupation` fields (not `company` or `job_title`).
-- **Google Drive/Docs**: Use OAuth tokens (`~/.hermes/google_token.json`) instead of service accounts to avoid 403 quota/permission errors.
+- **Google Drive/Docs**: Use OAuth tokens (`~/.hermes/indigo_google_credentials.json`) instead of service accounts to avoid 403 quota/permission errors.
 
 ### Report Output
 Final report link saved to `<hermes-root>/commons/data/ocas-expansion/last_run_report.txt`.
@@ -300,7 +302,7 @@ Read `references/init_pattern.md` for the `_open_db` implementation pattern. Ful
 
 **weave.export** -- Export data to staging dir via `COPY TO`. Read `references/import_export.md`.
 
-**weave.sync.google-contacts** -- Split into two independent jobs. Inbound: Google Contacts → Weave. Outbound: Weave → Google Contacts via BatchUpdateContacts. Staggered 30+ minutes apart to avoid 90 req/min quota contention. Outbound requires `writeback.google_contacts: true` in config — no per-sync approval step. Read `references/connectors.md` before any sync.
+**weave.sync.google-contacts** -- Run bidirectional Google Contacts sync. Inbound: Google Contacts → Weave. Outbound: Weave → Google Contacts via BatchUpdateContacts (200 per batch, with batchGet for etags). **MUST snapshot contacts before outbound push** (see references/connectors.md). Outbound requires `writeback.google_contacts: true` in config — no per-sync approval step. Read `references/connectors.md` before any sync.
 
 **weave.sync.clay** -- Bidirectional sync with Clay. Read `references/connectors.md`. Clay is enrichment source — Weave provenance wins conflicts. Outbound requires `writeback.clay: true` AND explicit approval.
 
@@ -369,6 +371,21 @@ When the user refers to a person using pronouns (him/her, his/hers, they/them) o
 
 When a tool call fails or an API returns an error, do not assume the feature is impossible or unsupported. Investigate the exact API specification, test alternative field names (e.g., `camelCase` vs `snake_case`), and verify the endpoint before concluding a capability is missing.
 
+### Data Integrity Safeguards
+
+**NEVER push Weave data to external systems without validation.** Web enrichment has produced corrupted data (Apr 2026):
+- Truncated occupation fields (missing first characters, e.g., "r Vice President" instead of "Senior Vice President")
+- Fragment org fields (e.g., "St" instead of "Stanford")
+- Full bios stored in occupation field
+- Job titles in city field
+
+Before any outbound sync:
+1. Run validation to catch fragment/truncated fields
+2. Clear invalid fields rather than pushing bad data
+3. **Always snapshot Google Contacts first** (see references/connectors.md)
+
+**Enrichment scraper bug**: The overnight enrichment scraper occasionally extracts substrings incorrectly, storing truncated text. If this happens, clear the corrupted fields and fix the scraper before re-running enrichment.
+
 ## Constraints
 
 - Never use SQL.
@@ -378,7 +395,9 @@ When a tool call fails or an API returns an error, do not assume the feature is 
 - Never silently collapse two Person records into one.
 - Use ontology standard relationship types in `Knows.rel_type`.
 - Store useful, durable, socially actionable facts only.
-- No outbound sync without explicit per-sync user approval.
+- **No outbound sync without explicit per-sync user approval.**
+- Do NOT use notes field for structured data — Person.notes column was dropped from schema. All provenance, verification details, and metadata must be stored as Fact nodes with typed predicates. There is no catch-all text field in Weave.
+- Before outbound Google sync, verify Person-level fields are populated. Data stored in Fact nodes is NOT automatically synced to Google — the outbound sync reads Person fields (org, occupation, location_city, phone). Contacts with data only in Facts but not on the Person node will sync blank. Aggregation step required before outbound sync.
 - Surface lock errors immediately.
 - Write a journal at the end of every run. Runs missing journals are invalid.
 
@@ -458,11 +477,11 @@ Stagger inbound and outbound by 30+ minutes to prevent quota contention on the 9
 
 The `weave:sync-google-inbound` job reads all Google Contacts and gap-fills Weave. The `weave:sync-google-outbound` job pushes Weave changes to Google using BatchUpdateContacts to minimize API calls.
 
-Manual invocation (`weave.sync.google-contacts`) runs both in sequence via `<hermes-root>/scripts/weave_google_bidirectional_sync.py`.
+Manual invocation (`weave.sync.google-contacts`) runs both in sequence via `<hermes-root>/skills/ocas-weave/scripts/google_sync.py`.
 
 ### Overnight Enrichment Pipeline
 
-Script: `<hermes-root>/scripts/overnight_weave_enrichment.py`
+Script: `<hermes-root>/skills/ocas-weave/scripts/overnight_enrichment.py`
 Logs: `<hermes-root>/data/weave-enrichment/run.log`
 Progress: `<hermes-root>/data/weave-enrichment/progress.jsonl`
 
@@ -503,7 +522,9 @@ Weave maintains bidirectional sync with Google Contacts via two separate scripts
 
 **Inbound:** Google Contacts → Weave. Match by `google_resource_name`, then email, then phone. Never match on name alone. Gap-fill only — Weave provenance wins. Two-pass: read-only lookup maps first, then write pass.
 
-**Outbound:** Weave → Google Contacts. Records modified since `last_sync.google_contacts` get PATCHed back to Google via `BatchUpdateContacts` (halves API consumption). Requires `writeback.google_contacts: true` in config. No per-sync approval step.
+**Outbound:** Weave → Google Contacts. Records modified since `last_sync.google_contacts` get pushed via `BatchUpdateContacts` (200 contacts per batch). Etags fetched via `people:batchGet` (50 per request) right before batch update to avoid stale etags. Requires `writeback.google_contacts: true` in config. No per-sync approval step. **MUST snapshot contacts before pushing** (see references/connectors.md).
+
+**Full field sync (mandatory):** Outbound MUST sync ALL fields from `references/google-field-map.md`, not just name/org/title/city/email. This includes: names (given, family, display), emailAddresses, phoneNumbers, organizations (name + title), addresses (city + countryCode), birthdays (from Fact nodes), urls (linkedin, website, instagram from Fact nodes), and relations (spouse from Knows edges). The sync script must query Facts and Knows relationships separately and merge them into the PATCH body. A partial sync that skips mapped fields is incorrect — every mapped Weave field must be reflected in Google.
 
 **OAuth scopes required:**
 - Read: `contacts` + `contacts.readonly` + `contacts.other.readonly`
@@ -527,9 +548,82 @@ Weave maintains bidirectional sync with Google Contacts via two separate scripts
 - Bulk imports (>100 rows) should use `COPY FROM` not individual inserts
 - Provenance for imported contacts: `source_type='imported'`, `confidence=0.8`
 - Outbound PATCH requires current etag from Google — fetch etag before update
-- Phone numbers may arrive with malformed leading `1` (e.g. `+1 (141)...`) — validate before storing
-- **Token path**: use `<hermes-root>/google_token.json` for owner's contacts (owner is the Google Contacts account owner, not Indigo)
-- **execute_code timeout**: The full `weave_google_bidirectional_sync.py` script times out in `execute_code` (300s limit) when outbound has 200+ contacts (2 API calls × 1.3s sleep each). Manual sync workaround: run inbound in one `execute_code` call (fast, ~30s), then run outbound in checkpointed batches. Use `staging/outbound_ckpt.txt` (one `google_resource_name` per line) to track progress — append after each successful push, load on resume to skip already-pushed contacts. Each batch handles ~150 contacts. Cron jobs don't have this issue since they run outside `execute_code`.
+- **Top-level etag**: Use the top-level `etag` field from the GET response, NOT `metadata.sources[0].etag`. The source etag causes `FAILED_PRECONDITION`.
+- **Stale resource names**: If a GET on `people/{resourceName}` returns 404, the resource name in Weave is stale. Re-match via `people:searchContacts` or refresh from inbound sync before pushing.
+- **Correct update endpoint**: Use `{resourceName}:updateContact` (not `{resourceName}`) for PATCH updates.
+- **Social profiles from notes**: Extract `notes.social_profiles` JSON and push each `{platform, url}` as `urls` entries with `type` set to the platform name.
+- **Phone numbers may arrive with malformed leading `1`** (e.g. `+1 (141)...`) — validate before storing
+- **Token path**: use `<hermes-root>/owner_google_credentials.json` for owner's contacts (owner is the Google Contacts account owner, not Indigo)
+- **execute_code timeout**: The full `weave_google_bidirectional_sync.py` script times out in `execute_code` (300s limit) when outbound has 200+ contacts (2 API calls × 1.3s sleep each). Manual sync workaround: run as background process via `terminal(background=true)` with `notify_on_complete=true`. The script handles its own checkpointing. Cron jobs don't have this issue since they run outside `execute_code`.
+- **Manual sync via background process**: When invoking `weave_google_bidirectional_sync.py` manually, always use `terminal(background=true, notify_on_complete=true, timeout=600)` — do NOT use `execute_code` (300s cap) or foreground `terminal` (blocks agent). The script takes ~280s for ~900 contacts (inbound ~90s, outbound ~190s). If the process needs to be monitored, check the checkpoint file size: `wc -l staging/outbound_ckpt.txt` — each line is a pushed `google_resource_name`. **If the process is killed (exit 143 SIGTERM or 137 SIGKILL)**, this is usually memory pressure from the real_ladybug C extension (~500-800MB RSS with 900+ contacts). The checkpoint system survives kills — just clear the LadybugDB lock (see "LadybugDB lock not released after process kill" below), re-run, and it resumes automatically.
+- **Multi-run resilience**: The script's checkpoint system (`staging/outbound_ckpt.txt`) survives process kills and restarts. If interrupted mid-outbound, re-running the script resumes from the last pushed contact. Example: 571 contacts pushed across 3 runs (150 + 50 + 471) without data loss or duplication. On successful completion, the checkpoint file is deleted automatically.
+- **Process spawning**: The Python script spawns a child process (real_ladybug C extension). You'll see two PIDs: parent (bash shell, `do_wait`) and child (python3, doing actual work). This is normal — do not kill the child thinking it's a duplicate.
+- **Output buffering**: When run as background process, stdout appears empty for 90-120+ seconds despite the script actively working. The `import real_ladybug` (21MB C extension) and initial database query take significant time before the first `_log()` output appears. Monitor progress via `ps aux | grep weave_google`, `/proc/<pid>/wchan`, or `ss -tnp | grep <pid>` (for active API calls). Do NOT kill the process thinking it's hung — check checkpoint file or process CPU usage first.
+- **Do NOT use SIGUSR1**: Sending `kill -USR1` to the Python process causes it to crash with `RuntimeError` (no traceback handler installed). Use `/proc/<pid>/wchan`, `ss -tnp`, and checkpoint file inspection for diagnostics instead.
+- **LadybugDB lock not released after process kill**: When the sync process is killed (SIGTERM/SIGKILL, exit codes 143/137), the LadybugDB file lock on `weave.lbug` can remain held by orphaned child processes. The next run fails with `RuntimeError: IO exception: Could not set lock on file`. **Diagnosis**: `fuser -v <hermes-root>/commons/db/ocas-weave/weave.lbug` shows which PID holds the lock. **Fix**:
+  ```bash
+  fuser -v <hermes-root>/commons/db/ocas-weave/weave.lbug 2>&1
+  # Kill the orphaned process
+  kill -9 <PID> 2>/dev/null
+  # Clean up stale .wal file
+  rm -f <hermes-root>/commons/db/ocas-weave/weave.lbug.wal
+  # Verify lock is released
+  fuser <hermes-root>/commons/db/ocas-weave/weave.lbug
+  # Then retry the sync
+  ```
+  **Warning**: Multiple processes may need killing — `fuser` only shows one at a time. Kill, re-check, repeat until `fuser` returns empty. The `.wal` file from a killed process is always stale; removing it is safe. The script will re-create it on next run.
+- **Stale etags on BatchUpdateContacts after multi-run resume**: When the sync process is killed and restarted multiple times, the script loads all modified contacts at startup (including their current Google etags). But on resume, contacts already in the checkpoint are filtered out. For contacts NOT yet pushed, the etags loaded at script start may become stale if those contacts were modified on Google between runs. **Symptom**: HTTP 400 with `FAILED_PRECONDITION: Request must set person.etag or person.metadata.sources.etag`. **Fix**: Re-run the sync again — the next invocation re-fetches fresh etags for all remaining contacts. The checkpoint system skips already-pushed contacts, so only the stale-etag contacts are retried with fresh etags. **Better fix**: Always use `people:batchGet` to fetch fresh etags right before batch update, not at script startup.
+- **BatchUpdateContacts empty response**: The API may return HTTP 200 with empty body `{}` instead of `updateResult`. Empty response = all contacts updated successfully. Must handle both cases in code.
+- **Batch etag fetching with people:batchGet**: Fetch 50 etags per request vs individual GETs. For 580 contacts: 12 batch GETs (50 each) + 3 batch updates (200 each) = 15 API calls vs 1162 individual calls.
+- **Refresh token expired/revoked (invalid_grant)**: The refresh token itself can become invalid (HTTP 400 `{"error": "invalid_grant", "error_description": "Token has been expired or revoked."}`). This is **different** from the silent refresh failure below — the refresh token is permanently dead and cannot be refreshed. **Causes**: User revoked app access, Google invalidated the token, or token was generated without `access_type=offline`. **Fix**: Full re-auth required — generate a new authorization URL with `access_type=offline&prompt=consent` and all required scopes, exchange the auth code for a new token with a fresh refresh_token. Use this diagnostic:
+  ```python
+  import json, urllib.request, urllib.parse
+  with open('<hermes-root>/google_token.json') as f:
+      td = json.load(f)
+  req = urllib.request.Request(
+      'https://oauth2.googleapis.com/token',
+      data=urllib.parse.urlencode({
+          'client_id': td['client_id'],
+          'client_secret': td['client_secret'],
+          'refresh_token': td['refresh_token'],
+          'grant_type': 'refresh_token'
+      }).encode(),
+      headers={'Content-Type': 'application/x-www-form-urlencoded'}
+  )
+  try:
+      resp = urllib.request.urlopen(req, timeout=30)
+      print('Refresh OK')
+  except urllib.error.HTTPError as e:
+      body = e.read().decode()
+      print(f'HTTP {e.code}: {body}')  # Look for invalid_grant
+  ```
+- **Pre-sync scope verification**: Before attempting any People API call, verify the token's scopes include contacts. The credentials at `<hermes-root>/owner_google_credentials.json` may have been generated for Gmail/Calendar/Drive only (missing `contacts`, `contacts.readonly`, `contacts.other.readonly`). Check with: `python3 -c "import json; td=json.load(open('<hermes-root>/google_token.json')); print(td.get('scopes', []))"`. If contacts scopes are missing, the token must be re-authorized with the correct scopes — the old token cannot be patched.
+- **Script file corruption (TOKEN_PATH =***)**: The sync script at `<hermes-root>/skills/ocas-weave/scripts/google_sync.py` may have a corrupted line like `TOKEN_PATH=*** / 'google_token.json'` (invalid Python, literal asterisks in source). This appears to be caused by a sed or find-and-replace that targeted `Path.home()` or the actual path and replaced it with `***`. **Fix**: Patch to `TOKEN_PATH = HERMES_HOME / 'owner_google_credentials.json'`. Always verify the script parses correctly before running: `python3 -c "import ast; ast.parse(open('<hermes-root>/skills/ocas-weave/scripts/google_sync.py').read()); print('OK')"`. **Same corruption can affect `weave_contact_snapshots.py`** — always check both scripts when TOKEN_PATH corruption is suspected.
+- **Wrong token file with stale/expired credentials (Apr 2026)**: The script at `<hermes-root>/skills/ocas-weave/scripts/google_sync.py` historically pointed to `owner_google_token.json`. This file had (1) an expired/revoked refresh token (HTTP 400 `invalid_grant` — permanently dead, cannot be refreshed), (2) NO `contacts` OAuth scopes (scopes were gmail, calendar, drive only). **Symptom**: Script fails with "Token refresh failed: HTTP Error 400: Bad Request" then 401 Unauthorized on the People API call. **Diagnosis**: Check which file the script reads — `grep TOKEN_PATH <hermes-root>/skills/ocas-weave/scripts/google_sync.py`. Then verify the token file's scopes: `python3 -c "import json; td=json.load(open('<hermes-root>/google_token.json')); print(td.get('scopes', []))"`. The correct file is `google_token.json` which has all required scopes including `contacts`. **Fix**: Patch the script's `TOKEN_PATH` to point to `google_token.json`. Do NOT delete `owner_google_token.json` — it may have been used for other services. **Why two files exist**: The _indigo and owner tokens are separate Google accounts; `google_token.json` is owner's contacts account with full contacts scope.
+- **Token expiry mid-run (silent refresh failure)**: The script's `get_access_token()` function has internal refresh logic, but it can fail silently — the refresh call may throw an exception that gets caught and logged to stdout (which is buffered for 90-120s), causing the script to fall through and return the expired token. When this happens, inbound succeeds (token was still valid) but outbound fails with HTTP 401 on most contacts. **Symptom**: Pushed ~118, Failed ~463, all 401s. **Fix**: Manually refresh the token before retrying:
+  ```python
+  python3 -c "
+  import json, urllib.request, urllib.parse
+  from datetime import datetime, timezone, timedelta
+  with open('<hermes-root>/google_token.json') as f:
+      td = json.load(f)
+  resp = urllib.request.urlopen(urllib.request.Request(
+      'https://oauth2.googleapis.com/token',
+      data=urllib.parse.urlencode({
+          'client_id': td['client_id'],
+          'client_secret': td['client_secret'],
+          'refresh_token': td['refresh_token'],
+          'grant_type': 'refresh_token'
+      }).encode()))
+  new = json.loads(resp.read())
+  td['token'] = new['access_token']
+  td['expiry'] = (datetime.now(timezone.utc) + timedelta(seconds=new['expires_in'])).isoformat()
+  with open('<hermes-root>/owner_google_credentials.json', 'w') as f:
+      json.dump(td, f, indent=2)
+  print('Token refreshed, expires:', td['expiry'])
+  "
+  ```
+  Then re-run the sync script. The checkpoint system (`staging/outbound_ckpt.txt`) ensures the retry picks up where it left off — no duplicate pushes. **Why this works**: The refresh_token itself is valid; the issue is the script's internal refresh logic failing, not the credentials being revoked.
 
 
 ## Visibility

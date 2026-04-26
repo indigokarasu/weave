@@ -11,7 +11,7 @@ description: >
 metadata:
   author: Indigo Karasu
   email: mx.indigo.karasu@gmail.com
-  version: "3.3.0"
+  version: "3.3.1"
   hermes:
     tags: [social-graph, people, relationships]
     category: memory
@@ -470,14 +470,11 @@ On first invocation of any Weave command, `_open_db()` handles auto-initializati
 | Job name | Mechanism | Schedule | Command |
 |---|---|---|---|
 | `weave:update` | cron | `0 0 * * *` (midnight daily) | `weave.update` |
-| `weave:sync-google-inbound` | cron | `0 4 * * *` (4AM UTC) | `python3 {skill_root}/scripts/weave_sync_inbound.py` |
-| `weave:sync-google-outbound` | cron | `30 4 * * *` (4:30AM UTC) | `python3 {skill_root}/scripts/weave_sync_outbound.py` |
+| `weave:sync-google` | cron | `0 4 * * *` (4AM UTC) | `python3 {skill_root}/scripts/google_sync.py` |
 
-Stagger inbound and outbound by 30+ minutes to prevent quota contention on the 90 req/min Google People API ceiling.
+The `weave:sync-google` job runs `google_sync.py`, which performs the inbound pass (read all Google Contacts and gap-fill Weave) followed by the outbound pass (push Weave changes via BatchUpdateContacts) in a single invocation. Both passes share the 90 req/min Google People API ceiling, so they run sequentially with internal throttling rather than as separate jobs.
 
-The `weave:sync-google-inbound` job reads all Google Contacts and gap-fills Weave. The `weave:sync-google-outbound` job pushes Weave changes to Google using BatchUpdateContacts to minimize API calls.
-
-Manual invocation (`weave.sync.google-contacts`) runs both in sequence via `/root/.hermes/skills/ocas-weave/scripts/google_sync.py`.
+Manual invocation (`weave.sync.google-contacts`) runs `python3 {skill_root}/scripts/google_sync.py`, which performs inbound then outbound in sequence.
 
 ### Overnight Enrichment Pipeline
 
@@ -513,12 +510,12 @@ Progress: `/root/.hermes/data/weave-enrichment/progress.jsonl`
 
 ## Google Contacts sync
 
-Weave maintains bidirectional sync with Google Contacts via two separate scripts (inbound and outbound run as independent cron jobs, staggered 30+ minutes apart to avoid quota contention):
+Weave maintains bidirectional sync with Google Contacts via a single script (`scripts/google_sync.py`) that runs both passes in sequence:
 
-- Inbound: `scripts/weave_sync_inbound.py` — Google Contacts → Weave
-- Outbound: `scripts/weave_sync_outbound.py` — Weave → Google Contacts
+- Inbound pass: Google Contacts → Weave
+- Outbound pass: Weave → Google Contacts (only if `writeback.google_contacts` is enabled in `config.json` and a previous `last_sync` checkpoint exists)
 
-**Why separate jobs?** Both inbound (paginated list of ALL contacts) and outbound (per-contact PATCH + etag GET) consume from the same 90 req/min Google People API quota. Running them sequentially causes cascading 429s. Staggering by 30+ minutes lets the quota window reset between runs.
+Both passes share the 90 req/min Google People API quota; outbound runs after inbound completes and uses BatchUpdateContacts to minimize calls.
 
 **Inbound:** Google Contacts → Weave. Match by `google_resource_name`, then email, then phone. Never match on name alone. Gap-fill only — Weave provenance wins. Two-pass: read-only lookup maps first, then write pass.
 

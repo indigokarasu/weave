@@ -1,3 +1,9 @@
+## [3.3.1] - 2026-04-26
+
+### Removed
+- Ad-hoc migration scratch scripts: `scripts/weave_enrich.py` (hardcoded UUIDs with literal `enrichments={}`), `scripts/weave_upsert.py` (mock with `try: import ladybugdb`), `scripts/weave_upsert_batch.py` (hardcoded single-contact record). Git history is the archive.
+- References to nonexistent `scripts/weave_sync_inbound.py` and `scripts/weave_sync_outbound.py` from SKILL.md. The actual implementation is `scripts/google_sync.py`, which runs inbound + outbound passes in a single invocation; SKILL.md cron table and Google Contacts sync section updated accordingly.
+
 ## [2.6.0] - 2026-04-12
 
 ### Added

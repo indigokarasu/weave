@@ -98,7 +98,7 @@ Bidirectional sync between Google Contacts and Weave's LadybugDB social graph. I
 | Write-back (outbound) | `contacts` | Requires full scope |
 
 ### Token and OAuth
-Google OAuth token at `<hermes-root>/google_token.json`. Client ID is `<GOOGLE_OAUTH_CLIENT_ID>.apps.googleusercontent.com`.
+Google OAuth credentials at `<hermes-root>/owner_google_credentials.json`. Client ID is `<GOOGLE_OAUTH_CLIENT_ID>.apps.googleusercontent.com`.
 
 ### Inbound Sync Procedure
 1. **Check/Initialize Weave Schema**: Verify database has tables. Refer to `references/schemas.md` for full DDL.
@@ -174,7 +174,7 @@ Orchestrates a multi-phase pipeline to enrich the personal social graph (Weave) 
   - Use `CREATE` for relationship properties (not `MERGE` with inline props).
   - Create two directed edges for bidirectional relations.
   - Use `org` and `occupation` fields (not `company` or `job_title`).
-- **Google Drive/Docs**: Use OAuth tokens (`~/.hermes/google_token.json`) instead of service accounts to avoid 403 quota/permission errors.
+- **Google Drive/Docs**: Use OAuth tokens (`~/.hermes/indigo_google_credentials.json`) instead of service accounts to avoid 403 quota/permission errors.
 
 ### Report Output
 Final report link saved to `<hermes-root>/commons/data/ocas-expansion/last_run_report.txt`.
@@ -395,7 +395,9 @@ Before any outbound sync:
 - Never silently collapse two Person records into one.
 - Use ontology standard relationship types in `Knows.rel_type`.
 - Store useful, durable, socially actionable facts only.
-- No outbound sync without explicit per-sync user approval.
+- **No outbound sync without explicit per-sync user approval.**
+- Do NOT use notes field for structured data — Person.notes column was dropped from schema. All provenance, verification details, and metadata must be stored as Fact nodes with typed predicates. There is no catch-all text field in Weave.
+- Before outbound Google sync, verify Person-level fields are populated. Data stored in Fact nodes is NOT automatically synced to Google — the outbound sync reads Person fields (org, occupation, location_city, phone). Contacts with data only in Facts but not on the Person node will sync blank. Aggregation step required before outbound sync.
 - Surface lock errors immediately.
 - Write a journal at the end of every run. Runs missing journals are invalid.
 
@@ -475,11 +477,11 @@ Stagger inbound and outbound by 30+ minutes to prevent quota contention on the 9
 
 The `weave:sync-google-inbound` job reads all Google Contacts and gap-fills Weave. The `weave:sync-google-outbound` job pushes Weave changes to Google using BatchUpdateContacts to minimize API calls.
 
-Manual invocation (`weave.sync.google-contacts`) runs both in sequence via `<hermes-root>/scripts/weave_google_bidirectional_sync.py`.
+Manual invocation (`weave.sync.google-contacts`) runs both in sequence via `<hermes-root>/skills/ocas-weave/scripts/google_sync.py`.
 
 ### Overnight Enrichment Pipeline
 
-Script: `<hermes-root>/scripts/overnight_weave_enrichment.py`
+Script: `<hermes-root>/skills/ocas-weave/scripts/overnight_enrichment.py`
 Logs: `<hermes-root>/data/weave-enrichment/run.log`
 Progress: `<hermes-root>/data/weave-enrichment/progress.jsonl`
 
@@ -551,7 +553,7 @@ Weave maintains bidirectional sync with Google Contacts via two separate scripts
 - **Correct update endpoint**: Use `{resourceName}:updateContact` (not `{resourceName}`) for PATCH updates.
 - **Social profiles from notes**: Extract `notes.social_profiles` JSON and push each `{platform, url}` as `urls` entries with `type` set to the platform name.
 - **Phone numbers may arrive with malformed leading `1`** (e.g. `+1 (141)...`) — validate before storing
-- **Token path**: use `<hermes-root>/google_token.json` for owner's contacts (owner is the Google Contacts account owner, not Indigo)
+- **Token path**: use `<hermes-root>/owner_google_credentials.json` for owner's contacts (owner is the Google Contacts account owner, not Indigo)
 - **execute_code timeout**: The full `weave_google_bidirectional_sync.py` script times out in `execute_code` (300s limit) when outbound has 200+ contacts (2 API calls × 1.3s sleep each). Manual sync workaround: run as background process via `terminal(background=true)` with `notify_on_complete=true`. The script handles its own checkpointing. Cron jobs don't have this issue since they run outside `execute_code`.
 - **Manual sync via background process**: When invoking `weave_google_bidirectional_sync.py` manually, always use `terminal(background=true, notify_on_complete=true, timeout=600)` — do NOT use `execute_code` (300s cap) or foreground `terminal` (blocks agent). The script takes ~280s for ~900 contacts (inbound ~90s, outbound ~190s). If the process needs to be monitored, check the checkpoint file size: `wc -l staging/outbound_ckpt.txt` — each line is a pushed `google_resource_name`. **If the process is killed (exit 143 SIGTERM or 137 SIGKILL)**, this is usually memory pressure from the real_ladybug C extension (~500-800MB RSS with 900+ contacts). The checkpoint system survives kills — just clear the LadybugDB lock (see "LadybugDB lock not released after process kill" below), re-run, and it resumes automatically.
 - **Multi-run resilience**: The script's checkpoint system (`staging/outbound_ckpt.txt`) survives process kills and restarts. If interrupted mid-outbound, re-running the script resumes from the last pushed contact. Example: 571 contacts pushed across 3 runs (150 + 50 + 471) without data loss or duplication. On successful completion, the checkpoint file is deleted automatically.
@@ -595,8 +597,9 @@ Weave maintains bidirectional sync with Google Contacts via two separate scripts
       body = e.read().decode()
       print(f'HTTP {e.code}: {body}')  # Look for invalid_grant
   ```
-- **Pre-sync scope verification**: Before attempting any People API call, verify the token's scopes include contacts. The token at `<hermes-root>/google_token.json` may have been generated for Gmail/Calendar/Drive only (missing `contacts`, `contacts.readonly`, `contacts.other.readonly`). Check with: `python3 -c "import json; td=json.load(open('<hermes-root>/google_token.json')); print(td.get('scopes', []))"`. If contacts scopes are missing, the token must be re-authorized with the correct scopes — the old token cannot be patched.
-- **Script file corruption (TOKEN_PATH =***)**: The sync script at `<hermes-root>/scripts/weave_google_bidirectional_sync.py` may have a corrupted line like `TOKEN_PATH=*** / 'google_token.json'` (invalid Python, literal asterisks in source). This appears to be caused by a sed or find-and-replace that targeted `Path.home()` or the actual path and replaced it with `***`. **Fix**: Patch to `TOKEN_PATH = HERMES_HOME / 'google_token.json'`. Always verify the script parses correctly before running: `python3 -c "import ast; ast.parse(open('<hermes-root>/scripts/weave_google_bidirectional_sync.py').read()); print('OK')"`.
+- **Pre-sync scope verification**: Before attempting any People API call, verify the token's scopes include contacts. The credentials at `<hermes-root>/owner_google_credentials.json` may have been generated for Gmail/Calendar/Drive only (missing `contacts`, `contacts.readonly`, `contacts.other.readonly`). Check with: `python3 -c "import json; td=json.load(open('<hermes-root>/google_token.json')); print(td.get('scopes', []))"`. If contacts scopes are missing, the token must be re-authorized with the correct scopes — the old token cannot be patched.
+- **Script file corruption (TOKEN_PATH =***)**: The sync script at `<hermes-root>/skills/ocas-weave/scripts/google_sync.py` may have a corrupted line like `TOKEN_PATH=*** / 'google_token.json'` (invalid Python, literal asterisks in source). This appears to be caused by a sed or find-and-replace that targeted `Path.home()` or the actual path and replaced it with `***`. **Fix**: Patch to `TOKEN_PATH = HERMES_HOME / 'owner_google_credentials.json'`. Always verify the script parses correctly before running: `python3 -c "import ast; ast.parse(open('<hermes-root>/skills/ocas-weave/scripts/google_sync.py').read()); print('OK')"`. **Same corruption can affect `weave_contact_snapshots.py`** — always check both scripts when TOKEN_PATH corruption is suspected.
+- **Wrong token file with stale/expired credentials (Apr 2026)**: The script at `<hermes-root>/skills/ocas-weave/scripts/google_sync.py` historically pointed to `owner_google_token.json`. This file had (1) an expired/revoked refresh token (HTTP 400 `invalid_grant` — permanently dead, cannot be refreshed), (2) NO `contacts` OAuth scopes (scopes were gmail, calendar, drive only). **Symptom**: Script fails with "Token refresh failed: HTTP Error 400: Bad Request" then 401 Unauthorized on the People API call. **Diagnosis**: Check which file the script reads — `grep TOKEN_PATH <hermes-root>/skills/ocas-weave/scripts/google_sync.py`. Then verify the token file's scopes: `python3 -c "import json; td=json.load(open('<hermes-root>/google_token.json')); print(td.get('scopes', []))"`. The correct file is `google_token.json` which has all required scopes including `contacts`. **Fix**: Patch the script's `TOKEN_PATH` to point to `google_token.json`. Do NOT delete `owner_google_token.json` — it may have been used for other services. **Why two files exist**: The _indigo and owner tokens are separate Google accounts; `google_token.json` is owner's contacts account with full contacts scope.
 - **Token expiry mid-run (silent refresh failure)**: The script's `get_access_token()` function has internal refresh logic, but it can fail silently — the refresh call may throw an exception that gets caught and logged to stdout (which is buffered for 90-120s), causing the script to fall through and return the expired token. When this happens, inbound succeeds (token was still valid) but outbound fails with HTTP 401 on most contacts. **Symptom**: Pushed ~118, Failed ~463, all 401s. **Fix**: Manually refresh the token before retrying:
   ```python
   python3 -c "
@@ -615,7 +618,7 @@ Weave maintains bidirectional sync with Google Contacts via two separate scripts
   new = json.loads(resp.read())
   td['token'] = new['access_token']
   td['expiry'] = (datetime.now(timezone.utc) + timedelta(seconds=new['expires_in'])).isoformat()
-  with open('<hermes-root>/google_token.json', 'w') as f:
+  with open('<hermes-root>/owner_google_credentials.json', 'w') as f:
       json.dump(td, f, indent=2)
   print('Token refreshed, expires:', td['expiry'])
   "

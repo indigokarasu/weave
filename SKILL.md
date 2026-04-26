@@ -116,7 +116,8 @@ Use `sync_id` from `sync_history.jsonl` to delete new records or revert enriched
 
 ### Pitfalls
 - **Other Contacts API**: `people_api.otherContacts()` is unreliable; use REST with `contacts.other.readonly`.
-- **REST API Preference**: Use `urllib.request` as `googleapiclient` is missing in `execute_code` sandbox.
+- **REST API Preference**: Use `urllib.request` as `googleapiclient` is missing in `execute_code` sandbox. Additionally, `googleapiclient.discovery.build` causes silent hangs (no output, no error) when run via `execute_code` or `terminal` background processes — always use `urllib.request` REST calls for Google People API.
+- **sources enum**: The `sources` query parameter for People API connections must be `READ_SOURCE_TYPE_CONTACT` (not `READ_SOURCE_CONTACT`). This matters when calling the REST API directly.
 - **Name Enrichment**: Incremental syncs typically focus on filling `name_given` and `name_family`.
 - **Token Expiry**: `expiry` field can be ISO string or integer; handle both.
 - **Scope Expansion**: Requires re-auth with `prompt=consent&access_type=offline`.
@@ -203,6 +204,34 @@ When querying Weave via LadybugDB (`real_ladybug`), the return format depends on
 - **`r.get_column_names()`** works for all queries and returns a list of column name strings.
 
 Key mistake to avoid: Using `row['name']` on a list row from column selectors will raise `TypeError: list indices must be integers or slices, not str`. Always match your access pattern to the return format.
+
+### Iteration Pitfalls (discovered Apr 2026)
+
+- **`r.get_all()` fails on corrupt rows**: If any row contains corrupted/invalid UTF-8 data, `get_all()` raises `UnicodeDecodeError` and returns NOTHING — even if 99% of rows are valid. For queries over the full Person table, use row-by-row iteration with error handling instead:
+  ```python
+  rows = []
+  while True:
+      try:
+          row = r.get_next()
+          rows.append(row)
+      except StopIteration:
+          break
+      except Exception as e:
+          if "No more tuples" in str(e):
+              break  # LadybugDB raises this instead of StopIteration
+          if "utf-8" in str(e):
+              continue  # Skip corrupt row
+          raise
+  ```
+- **End-of-results exception**: `r.get_next()` raises `Runtime exception: No more tuples in QueryResult` when exhausted — NOT `StopIteration`. Always check for this string in exception handlers. The pattern `"No more tuples" in str(e)` distinguishes it from data corruption errors.
+- **Import pattern**: `from real_ladybug import Database, Connection` (top-level). There is NO `lb` submodule — both `Database` and `Connection` are exported directly. `READ_ONLY`/`READ_WRITE` constants are NOT exported — use `Database(path, read_only=True)` parameter instead. Connection: `Connection(db)` then `conn.execute(cypher, params)`.
+  ```python
+  from real_ladybug import Database, Connection
+  db = Database("/path/to/weave.lbug", read_only=True)
+  conn = Connection(db)
+  r = conn.execute("MATCH (p:Person) RETURN p.id, p.name LIMIT 5")
+  ```
+- **No `randomUUID()` in Cypher**: LadybugDB does not support `randomUUID()`. Generate UUIDs in Python with `uuid.uuid4()` and pass as parameters: `CREATE (f:Fact {id: $fact_id, ...})`. Always generate IDs on the Python side, never in Cypher expressions.
 
 ## Storage layout
 
@@ -431,6 +460,16 @@ The `weave:sync-google-inbound` job reads all Google Contacts and gap-fills Weav
 
 Manual invocation (`weave.sync.google-contacts`) runs both in sequence via `<hermes-root>/scripts/weave_google_bidirectional_sync.py`.
 
+### Overnight Enrichment Pipeline
+
+Script: `<hermes-root>/scripts/overnight_weave_enrichment.py`
+Logs: `<hermes-root>/data/weave-enrichment/run.log`
+Progress: `<hermes-root>/data/weave-enrichment/progress.jsonl`
+
+**Re-processing pitfall**: The progress file tracks all contacted person IDs, but ~65% of searches return "no extractable data." If the filter excludes ALL progress-file IDs permanently, contacts that failed enrichment are never retried.
+
+**Do NOT filter by progress file at all.** The enrichment logic (`enrich_weave_contact`) only fills fields that are currently NULL/empty in the database — writing the same value twice is harmless. Filtering by progress entries caused a bug (Apr 2026): contacts with partial enrichment (e.g., `location_city` found, but `org` and `occupation` still missing) were permanently excluded because they had a non-empty `fields` entry in progress.jsonl. The simplest correct approach: query contacts with gaps directly from the database, skip no one, and let the SET clause only fill what's missing. The progress file should be used for logging/monitoring only, not for filtering candidates.
+
 
 ## Self-update
 
@@ -490,6 +529,7 @@ Weave maintains bidirectional sync with Google Contacts via two separate scripts
 - Outbound PATCH requires current etag from Google — fetch etag before update
 - Phone numbers may arrive with malformed leading `1` (e.g. `+1 (141)...`) — validate before storing
 - **Token path**: use `<hermes-root>/google_token.json` for owner's contacts (owner is the Google Contacts account owner, not Indigo)
+- **execute_code timeout**: The full `weave_google_bidirectional_sync.py` script times out in `execute_code` (300s limit) when outbound has 200+ contacts (2 API calls × 1.3s sleep each). Manual sync workaround: run inbound in one `execute_code` call (fast, ~30s), then run outbound in checkpointed batches. Use `staging/outbound_ckpt.txt` (one `google_resource_name` per line) to track progress — append after each successful push, load on resume to skip already-pushed contacts. Each batch handles ~150 contacts. Cron jobs don't have this issue since they run outside `execute_code`.
 
 
 ## Visibility

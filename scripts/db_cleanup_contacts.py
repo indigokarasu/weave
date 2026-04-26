@@ -14,23 +14,27 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+AGENT_ROOT = Path(os.environ.get("HERMES_HOME") or os.environ.get("OCAS_AGENT_ROOT") or Path.home() / ".hermes")
+
 # Add the Google Workspace skill scripts to path
-sys.path.insert(0, '/root/.hermes/skills/productivity/google-workspace/scripts')
+sys.path.insert(0, str(AGENT_ROOT / "skills/productivity/google-workspace/scripts"))
 
 # Set up environment
-os.environ['HERMES_HOME'] = '/root/.hermes'
+os.environ.setdefault('HERMES_HOME', str(AGENT_ROOT))
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 class GoogleContactsCleanup:
-    def __init__(self, backup_dir="/root/.hermes/backups/google_contacts"):
+    def __init__(self, backup_dir=None):
+        if backup_dir is None:
+            backup_dir = AGENT_ROOT / "backups/google_contacts"
         self.backup_dir = Path(backup_dir)
         self.backup_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Load credentials
-        token_path = '/root/.hermes/jared_google_credentials.json'
+        token_path = AGENT_ROOT / "jared_google_credentials.json"
         with open(token_path) as f:
             token_data = json.load(f)
         
@@ -371,7 +375,7 @@ def main():
     parser = argparse.ArgumentParser(description='Google Contacts Field Mapping Cleanup')
     parser.add_argument('--test', action='store_true', help='Run in test mode (first 5 contacts)')
     parser.add_argument('--test-count', type=int, default=5, help='Number of contacts to test')
-    parser.add_argument('--backup-dir', default='/root/.hermes/backups/google_contacts',
+    parser.add_argument('--backup-dir', default=str(AGENT_ROOT / 'backups/google_contacts'),
                        help='Backup directory')
     
     args = parser.parse_args()

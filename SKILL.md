@@ -11,7 +11,7 @@ description: >
 metadata:
   author: Indigo Karasu
   email: mx.indigo.karasu@gmail.com
-  version: "3.3.0"
+  version: "3.3.1"
   hermes:
     tags: [social-graph, people, relationships]
     category: memory

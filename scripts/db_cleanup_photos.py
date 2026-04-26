@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Remove googleusercontent photo URL fields from Google Contacts."""
 import sys, json, os, time
-sys.path.insert(0, '/root/.hermes/hermes-agent/venv/lib/python3.11/site-packages')
-os.environ['HERMES_HOME'] = '/root/.hermes'
+from pathlib import Path
+
+AGENT_ROOT = Path(os.environ.get("HERMES_HOME") or os.environ.get("OCAS_AGENT_ROOT") or Path.home() / ".hermes")
+sys.path.insert(0, str(AGENT_ROOT / "hermes-agent/venv/lib/python3.11/site-packages"))
+os.environ.setdefault('HERMES_HOME', str(AGENT_ROOT))
 
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-with open('/root/.hermes/jared_google_credentials.json') as f:
+with open(AGENT_ROOT / "jared_google_credentials.json") as f:
     token_data = json.load(f)
 
 creds = Credentials(

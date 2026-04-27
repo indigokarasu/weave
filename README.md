@@ -55,6 +55,10 @@ Weave maintains a private social graph where every stored fact carries provenanc
 
 ## Changelog
 
+### v3.3.1 — April 26, 2026
+- Removed ad-hoc migration scratch scripts (`scripts/weave_enrich.py`, `scripts/weave_upsert.py`, `scripts/weave_upsert_batch.py`) — git history is the archive
+- Removed SKILL.md references to nonexistent `scripts/weave_sync_inbound.py` / `scripts/weave_sync_outbound.py`; canonical implementation is `scripts/google_sync.py` (single-invocation inbound + outbound)
+
 ### v2.6.0 — April 12, 2026
 - Document Google Contacts sync procedure, OAuth scopes, and pitfalls; Clay → Mesh MCP migration note
 
@@ -68,13 +72,6 @@ Weave maintains a private social graph where every stored fact carries provenanc
 
 ### v2.2.0 -- March 22, 2026
 - Routing improvements
-
-### v2.1.0 -- March 22, 2026
-- Mandatory journal entries at end of every run
-- Standardized path usage across all commands
-
-### v2.0.0 -- March 18, 2026
-- Initial release as part of the unified OCAS skill suite
 ---
 
 *Weave is part of the [OCAS Agent Suite](https://github.com/indigokarasu) -- a collection of interconnected skills for personal intelligence, autonomous research, and continuous self-improvement. Each skill owns a narrow responsibility and communicates with others through structured signal files, shared journals, and Chronicle, a long-term knowledge graph that accumulates verified facts over time.*

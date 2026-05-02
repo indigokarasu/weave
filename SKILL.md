@@ -310,9 +310,11 @@ Read `references/init_pattern.md` for the `_open_db` implementation pattern. Ful
 
 **weave.writeback.contacts** -- Push records to Google Contacts or Clay. Disabled by default. Requires config enablement AND per-action user approval.
 
-**weave.init** -- Diagnostic and repair command. Checks schema, creates missing tables, verifies indexes. Use when troubleshooting, not as a prerequisite — the database initializes automatically on first use.
+**weave.init** — Diagnostic and repair command. Checks schema, creates missing tables, verifies indexes. Use when troubleshooting, not as a prerequisite — the database initializes automatically on first use.
 
-**weave.status** -- Report graph health and config state.
+**weave.maintenance** — Perform systematic database inspection, cleaning, and data quality validation. Detects corrupted data from enrichment scraper bugs, identifies orphaned nodes, finds duplicate Person records, validates data integrity before Google Contacts sync. Uses LadybugDB-specific query patterns to handle database quirks. Essential before any outbound sync to prevent bad data propagation.
+
+**weave.status** — Report graph health and config state. Shows Person/Preference/Fact/relationship counts, recent activity, missing field statistics, and data quality health. If commands fail, can fall back to direct LadybugDB queries to generate status from raw database state.
 
 ```cypher
 CALL show_tables() RETURN *;
@@ -599,7 +601,9 @@ Weave maintains bidirectional sync with Google Contacts via two separate scripts
   ```
 - **Pre-sync scope verification**: Before attempting any People API call, verify the token's scopes include contacts. The credentials at `<hermes-root>/owner_google_credentials.json` may have been generated for Gmail/Calendar/Drive only (missing `contacts`, `contacts.readonly`, `contacts.other.readonly`). Check with: `python3 -c "import json; td=json.load(open('<hermes-root>/google_token.json')); print(td.get('scopes', []))"`. If contacts scopes are missing, the token must be re-authorized with the correct scopes — the old token cannot be patched.
 - **Script file corruption (TOKEN_PATH =***)**: The sync script at `<hermes-root>/skills/ocas-weave/scripts/google_sync.py` may have a corrupted line like `TOKEN_PATH=*** / 'google_token.json'` (invalid Python, literal asterisks in source). This appears to be caused by a sed or find-and-replace that targeted `Path.home()` or the actual path and replaced it with `***`. **Fix**: Patch to `TOKEN_PATH = HERMES_HOME / 'owner_google_credentials.json'`. Always verify the script parses correctly before running: `python3 -c "import ast; ast.parse(open('<hermes-root>/skills/ocas-weave/scripts/google_sync.py').read()); print('OK')"`. **Same corruption can affect `weave_contact_snapshots.py`** — always check both scripts when TOKEN_PATH corruption is suspected.
+- **google_sync.py truncated (missing main block)**: The file at `<hermes-root>/skills/ocas-weave/scripts/google_sync.py` was found truncated at exactly 500 lines — it ended mid-function with `sync_outbound()` missing its `return` statement, and there was no `main()` or `if __name__ == '__main__'` block. As of Apr 27 2026, the missing code has been patched in. **Manual sync**: Use `python3 scripts/run_sync.py` (imports from google_sync.py) or `python3 scripts/google_sync.py` (now has its own main block).
 - **Wrong token file with stale/expired credentials (Apr 2026)**: The script at `<hermes-root>/skills/ocas-weave/scripts/google_sync.py` historically pointed to `owner_google_token.json`. This file had (1) an expired/revoked refresh token (HTTP 400 `invalid_grant` — permanently dead, cannot be refreshed), (2) NO `contacts` OAuth scopes (scopes were gmail, calendar, drive only). **Symptom**: Script fails with "Token refresh failed: HTTP Error 400: Bad Request" then 401 Unauthorized on the People API call. **Diagnosis**: Check which file the script reads — `grep TOKEN_PATH <hermes-root>/skills/ocas-weave/scripts/google_sync.py`. Then verify the token file's scopes: `python3 -c "import json; td=json.load(open('<hermes-root>/google_token.json')); print(td.get('scopes', []))"`. The correct file is `google_token.json` which has all required scopes including `contacts`. **Fix**: Patch the script's `TOKEN_PATH` to point to `google_token.json`. Do NOT delete `owner_google_token.json` — it may have been used for other services. **Why two files exist**: The _indigo and owner tokens are separate Google accounts; `google_token.json` is owner's contacts account with full contacts scope.
+- **HTTP 403 "insufficient authentication scopes" despite valid token (May 2026)**: The Google People API may return HTTP 403 with "Request had insufficient authentication scopes" even when the OAuth token contains all required scopes (`contacts`, `contacts.readonly`, `contacts.other.readonly`) and is not expired. This appears to be an intermittent Google API issue. **Symptom**: Inbound sync succeeds completely, but outbound BatchUpdateContacts fails on all batches with 403 errors. **Diagnosis**: Verify token scopes with `python3 -c "import json; td=json.load(open('<hermes-root>/owner_google_credentials.json')); print(td.get('scopes', []))"` and expiry. **Workaround**: Retry the sync later as this is usually temporary. The snapshot system protects against data loss during failed outbound attempts.
 - **Token expiry mid-run (silent refresh failure)**: The script's `get_access_token()` function has internal refresh logic, but it can fail silently — the refresh call may throw an exception that gets caught and logged to stdout (which is buffered for 90-120s), causing the script to fall through and return the expired token. When this happens, inbound succeeds (token was still valid) but outbound fails with HTTP 401 on most contacts. **Symptom**: Pushed ~118, Failed ~463, all 401s. **Fix**: Manually refresh the token before retrying:
   ```python
   python3 -c "
@@ -643,6 +647,7 @@ public
 | `references/connectors.md` | Before any sync with Google Contacts or Clay |
 | `references/vcard_projection.md` | Before weave.project.vcard |
 | `references/journal.md` | Before weave.journal; at end of every run |
+| `references/database_maintenance.md` | Before weave.maintenance or when troubleshooting data quality issues |
 
 ## Update command
 

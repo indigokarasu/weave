@@ -21,10 +21,9 @@ from pathlib import Path
 # Paths
 HERMES_HOME = Path.home() / '.hermes'
 DB_PATH = HERMES_HOME / 'commons/db/ocas-weave/weave.lbug'
-CONFIG_PATH = HERMES_HOME / 'commons/db/ocas-weave/config.json'
+CONFIG_PATH = HERMES_HOME / 'commons/data/ocas-weave/config.json'
 # Jared's Google account for contacts sync
 TOKEN_PATH = HERMES_HOME / 'jared_google_credentials.json'
-
 PEOPLE_API_BASE = 'https://people.googleapis.com/v1'
 
 def _log(msg):
@@ -59,6 +58,9 @@ def get_access_token():
     if expiry_str:
         try:
             expiry = datetime.fromisoformat(expiry_str.replace('Z', '+00:00'))
+            # Ensure expiry is timezone-aware for comparison with timezone-aware now
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
             expired = datetime.now(timezone.utc) >= expiry
         except (ValueError, TypeError):
             pass
@@ -540,13 +542,33 @@ def main():
         _log(traceback.format_exc())
 
     _log("\n[Outbound] Weave → Google Contacts...")
-    try:
-        result_out = sync_outbound(db, token, last_sync_at)
-        _log(f"Outbound: pushed={result_out.get('outbound_pushed', '?')} failed={result_out.get('outbound_failed', '?')} skipped={result_out.get('outbound_skipped', '?')} stale={result_out.get('outbound_stale', '?')}")
-    except Exception as e:
-        _log(f"ERROR outbound: {e}")
-        import traceback
-        _log(traceback.format_exc())
+    writeback_enabled = config.get('writeback', {}).get('google_contacts', False)
+    if not writeback_enabled:
+        _log("Outbound SKIPPED: writeback.google_contacts is false in config (set true to enable outbound)")
+        result_out = {
+            'outbound_pushed': 0,
+            'outbound_failed': 0,
+            'outbound_skipped': 0,
+            'outbound_stale': 0,
+            'outbound_rate_limited': 0,
+            'outbound_created': 0
+        }
+    else:
+        try:
+            result_out = sync_outbound(db, token, last_sync_at)
+            _log(f"Outbound: pushed={result_out.get('outbound_pushed', '?')} failed={result_out.get('outbound_failed', '?')} skipped={result_out.get('outbound_skipped', '?')} stale={result_out.get('outbound_stale', '?')} rate_limited={result_out.get('outbound_rate_limited', '?')} created={result_out.get('outbound_created', '?')}")
+        except Exception as e:
+            _log(f"ERROR outbound: {e}")
+            import traceback
+            _log(traceback.format_exc())
+            result_out = {
+                'outbound_pushed': 0,
+                'outbound_failed': 0,
+                'outbound_skipped': 0,
+                'outbound_stale': 0,
+                'outbound_rate_limited': 0,
+                'outbound_created': 0
+            }
 
     now = datetime.now(timezone.utc).isoformat()
     if "last_sync" not in config:

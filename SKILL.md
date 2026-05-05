@@ -11,10 +11,11 @@ description: >
 metadata:
   author: Indigo Karasu
   email: mx.indigo.karasu@gmail.com
-  version: "3.3.1"
+  version: "3.3.2"
   hermes:
     tags: [social-graph, people, relationships]
     category: memory
+    required_commands: ["sherlock"]
     cron:
       - name: "weave:update"
         schedule: "25 7 * * *"
@@ -285,6 +286,8 @@ Every command that opens the database runs `_ensure_init()` first. No manual ini
 
 Read `references/init_pattern.md` for the `_open_db` implementation pattern. Full DDL is in `references/schemas.md`.
 
+**Config.json missing**: Health checks should verify `config.json` exists in `{agent_root}/commons/db/ocas-weave/`. If missing, run `weave.init` to trigger auto-creation via `_ensure_init()`, as health checks do not invoke database commands and thus do not trigger auto-init.
+
 
 ## Commands
 
@@ -344,9 +347,25 @@ Every written fact requires: `source_type` (direct / inferred / imported / user-
 
 When enriching a contact, follow this strict order:
 
+0. **Pre-Search Seed Quality Check** — Before building any search query:
+   - Check the contact's `source_type` and `confidence`
+   - If `source_type` is `web_enrichment` and `confidence` < 0.8: **Reject all fields** (org, location, occupation). Use only trusted signals: `name`, `email`, `phone`
+   - If `source_type` is `imported`, `scout_research`, or `user_provided`: Use all provided fields for search context
+   - Search query must only include trusted signals: `name` (mandatory), `email` (mandatory), `phone` (area code hint), `location` (only if trusted)
+
 1. **Read** — Query Weave for the existing Person record. Confirm the record exists before any enrichment.
 2. **Search** — Use the searchx skill (SearXNG via `execute_code`) for web research. If SearchX is not available, fallback to the native `web_search` tool.
 3. **Enrich** — Add new Facts, Preferences, and relationship edges with full provenance (`source_type`, `source_ref`, `confidence`, `record_time`) on every write.
+   - **Scout Phase**: Use SearchX (SearXNG via `execute_code`) for identity-resolved research
+   - **Sift Phase**: Use Scrapling (v0.4.7+) with Playwright for JS-rendered pages, or platform APIs (GitHub API, Bluesky public API) for structured data. Do NOT use urllib static fetches.
+   - **Sherlock Phase**: Run `sherlock --print-found --no-color '<username>' --timeout 90` (required command). **Critical**: Sherlock finds USERNAMES, not verified profiles. You MUST verify 2+ data points for each result. Ignore username-only matches (different person with same handle).
+
+   - **High-Quality Propagation Rule**: If a VERIFIED profile (2+ data points) SELF-IDENTIFIES another social platform:
+     * Example: Verified GitHub bio says "Twitter: @handle" or links to Bluesky
+     * Example: Verified LinkedIn profile links to GitHub/Bluesky
+     * Example: Verified personal website/portfolio links to social platforms
+     THEN: Treat that linked platform as HIGH-QUALITY (no separate 2+ point check needed). The verification transfers from the trusted source to its self-linked profiles.
+     Note: If the linked platform is inaccessible (X.com blocks crawlers, account suspended), log it as "high-quality (linked from verified <source>) but inaccessible".
 4. **Write** — Persist changes to Weave via `MERGE` on Person nodes and `CREATE` on Fact/Preference nodes. Always read back after write to confirm success.
 5. **Search again** — With newly enriched data (company names, locations, titles), construct follow-up searches to find deeper information.
 6. **Sync** — After every Weave write that touches data mapped in `references/google-field-map.md`, immediately sync to Google Contacts. Never update one without mirroring the other.
@@ -397,6 +416,12 @@ Before any outbound sync:
 - Store useful, durable, socially actionable facts only.
 - **No outbound sync without explicit per-sync user approval.**
 - Do NOT use notes field for structured data — Person.notes column was dropped from schema. All provenance, verification details, and metadata must be stored as Fact nodes with typed predicates. There is no catch-all text field in Weave.
+- **Pitfall: Sync script `notes` property references**: The `google_sync.py` script may retain deprecated references to the dropped `Person.notes` property, causing `Cannot find property notes for p` errors. Common locations to patch:
+  1. Inbound MERGE SET clauses: Remove `p.notes = CASE WHEN p.notes IS NULL OR p.notes = '' THEN $notes ELSE p.notes END` lines.
+  2. Inbound CREATE statements: Remove `notes: $notes` from `CREATE (p:Person { ... })` property list.
+  3. Outbound RETURN clauses: Remove `p.notes` from the `MATCH ... RETURN` list.
+  4. `build_contact_body` function: Remove `notes` from the parameter list and all calls to this function.
+  5. Cypher parameter dicts: Remove `"notes": notes` entries from all parameter dictionaries passed to `conn.execute()`.
 - Before outbound Google sync, verify Person-level fields are populated. Data stored in Fact nodes is NOT automatically synced to Google — the outbound sync reads Person fields (org, occupation, location_city, phone). Contacts with data only in Facts but not on the Person node will sync blank. Aggregation step required before outbound sync.
 - Surface lock errors immediately.
 - Write a journal at the end of every run. Runs missing journals are invalid.
@@ -486,6 +511,19 @@ Progress: `/root/.hermes/data/weave-enrichment/progress.jsonl`
 
 **Do NOT filter by progress file at all.** The enrichment logic (`enrich_weave_contact`) only fills fields that are currently NULL/empty in the database — writing the same value twice is harmless. Filtering by progress entries caused a bug (Apr 2026): contacts with partial enrichment (e.g., `location_city` found, but `org` and `occupation` still missing) were permanently excluded because they had a non-empty `fields` entry in progress.jsonl. The simplest correct approach: query contacts with gaps directly from the database, skip no one, and let the SET clause only fill what's missing. The progress file should be used for logging/monitoring only, not for filtering candidates.
 
+**Progress file duplicate monitoring**: Health checks must verify progress.jsonl duplicate rate (unique contact IDs / total entries) stays below 10%. Higher rates indicate the script is incorrectly filtering by progress file. If duplicates exceed 10%, truncate progress.jsonl and patch the script to remove any progress-file-based filtering.
+  - Note: progress.jsonl uses the `id` field (not `contact_id`) for contact identifiers. When counting unique contact IDs, parse the `id` key from each JSON line in the file.
+  - Recurring errors in progress.jsonl (e.g., `Connection.execute() got unexpected keyword argument 'occupation'`) indicate script bugs; truncate the file to clear stale entries and patch the script.
+
+**Enrichment Pipeline Health Check**: Run these checks periodically (e.g., via cron) to verify pipeline health:
+1. Check if enrichment process is running: `ps aux | grep overnight_weave_enrichment | grep -v grep`
+2. If not running and before 6am PDT, restart: `python3 /root/.hermes/scripts/overnight_weave_enrichment.py`
+3. Check progress.jsonl duplicates: Count unique `id` values vs total entries; truncate if duplicate rate >10%
+4. Check enrichment stats: `cat /root/.hermes/data/weave-enrichment/stats.json`
+5. Check last sync time: `cat /root/.hermes/commons/db/ocas-weave/config.json | grep last_sync`
+6. Check recent sync activity: `tail -5 /root/.hermes/commons/data/ocas-weave/sync_log.jsonl`
+7. Verify Google token scopes: Ensure `contacts` (or full URI `https://www.googleapis.com/auth/contacts`) is present in token scopes.
+
 
 ## Self-update
 
@@ -508,7 +546,7 @@ Progress: `/root/.hermes/data/weave-enrichment/progress.jsonl`
 7. Output exactly: `I updated Weave from version {old} to {new}`
 
 
-## Google Contacts sync
+**Google Contacts sync**
 
 Weave maintains bidirectional sync with Google Contacts via a single script (`scripts/google_sync.py`) that runs both passes in sequence:
 
@@ -516,6 +554,9 @@ Weave maintains bidirectional sync with Google Contacts via a single script (`sc
 - Outbound pass: Weave → Google Contacts (only if `writeback.google_contacts` is enabled in `config.json` and a previous `last_sync` checkpoint exists)
 
 Both passes share the 90 req/min Google People API quota; outbound runs after inbound completes and uses BatchUpdateContacts to minimize calls.
+
+**Pre-flight check (recommended before manual or cron sync):**
+Run the token health check in `references/google-token-quick-check.md` to catch dead refresh tokens before attempting sync. A dead token (`invalid_grant`) will cause the sync to fail with HTTP 401 after starting.
 
 **Inbound:** Google Contacts → Weave. Match by `google_resource_name`, then email, then phone. Never match on name alone. Gap-fill only — Weave provenance wins. Two-pass: read-only lookup maps first, then write pass.
 
@@ -594,9 +635,57 @@ Both passes share the 90 req/min Google People API quota; outbound runs after in
       body = e.read().decode()
       print(f'HTTP {e.code}: {body}')  # Look for invalid_grant
   ```
-- **Pre-sync scope verification**: Before attempting any People API call, verify the token's scopes include contacts. The credentials at `/root/.hermes/jared_google_credentials.json` may have been generated for Gmail/Calendar/Drive only (missing `contacts`, `contacts.readonly`, `contacts.other.readonly`). Check with: `python3 -c "import json; td=json.load(open('/root/.hermes/google_token.json')); print(td.get('scopes', []))"`. If contacts scopes are missing, the token must be re-authorized with the correct scopes — the old token cannot be patched.
-- **Script file corruption (TOKEN_PATH =***)**: The sync script at `/root/.hermes/skills/ocas-weave/scripts/google_sync.py` may have a corrupted line like `TOKEN_PATH=*** / 'google_token.json'` (invalid Python, literal asterisks in source). This appears to be caused by a sed or find-and-replace that targeted `Path.home()` or the actual path and replaced it with `***`. **Fix**: Patch to `TOKEN_PATH = HERMES_HOME / 'jared_google_credentials.json'`. Always verify the script parses correctly before running: `python3 -c "import ast; ast.parse(open('/root/.hermes/skills/ocas-weave/scripts/google_sync.py').read()); print('OK')"`. **Same corruption can affect `weave_contact_snapshots.py`** — always check both scripts when TOKEN_PATH corruption is suspected.
-- **Wrong token file with stale/expired credentials (Apr 2026)**: The script at `/root/.hermes/skills/ocas-weave/scripts/google_sync.py` historically pointed to `jared_google_token.json`. This file had (1) an expired/revoked refresh token (HTTP 400 `invalid_grant` — permanently dead, cannot be refreshed), (2) NO `contacts` OAuth scopes (scopes were gmail, calendar, drive only). **Symptom**: Script fails with "Token refresh failed: HTTP Error 400: Bad Request" then 401 Unauthorized on the People API call. **Diagnosis**: Check which file the script reads — `grep TOKEN_PATH /root/.hermes/skills/ocas-weave/scripts/google_sync.py`. Then verify the token file's scopes: `python3 -c "import json; td=json.load(open('/root/.hermes/google_token.json')); print(td.get('scopes', []))"`. The correct file is `google_token.json` which has all required scopes including `contacts`. **Fix**: Patch the script's `TOKEN_PATH` to point to `google_token.json`. Do NOT delete `jared_google_token.json` — it may have been used for other services. **Why two files exist**: The _indigo and Jared tokens are separate Google accounts; `google_token.json` is Jared's contacts account with full contacts scope.
+- **Pre-sync scope verification**: Before attempting any People API call, verify the token's scopes include contacts. The credentials at `/root/.hermes/jared_google_credentials.json` may have been generated for Gmail/Calendar/Drive only (missing `contacts`, `contacts.readonly`, `contacts.other.readonly`). Check with: `python3 -c "import json; td=json.load(open('/root/.hermes/google_token.json')); print(td.get('scopes', []))"`. If contacts scopes are missing, the token must be re-authorized with the correct scopes — the old token cannot be patched. For a complete diagnostic workflow including refresh token validity testing and re-auth steps, see `references/google-token-diagnostics.md`.
+  - Note: The full URI scope `https://www.googleapis.com/auth/contacts` is equivalent to the short `contacts` scope. When checking scopes, accept either form.
+**Script file corruption (TOKEN_PATH =*** or /root/...json)**: The sync script at `/root/.hermes/skills/ocas-weave/scripts/google_sync.py` may have a corrupted line like `TOKEN_PATH=*** / 'google_token.json'` (invalid Python, literal asterisks in source) or `TOKEN_PATH='/root/...json'` (truncated path from read_file output being persisted). These are caused by: 1) sed/find-and-replace targeting `Path.home()` or the actual path and replacing it with `***`, or 2) read_file truncation (displaying `/root/...json` instead of the full path) being written back to the script. **Fix**: Patch to `TOKEN_PATH = '/root/.hermes/google_token.json'`. Always verify the script parses correctly before running: `python3 -c "import ast; ast.parse(open('/root/.hermes/skills/ocas-weave/scripts/google_sync.py').read()); print('OK')"`. **Same corruption can affect `weave_contact_snapshots.py`** — always check both scripts when TOKEN_PATH corruption is suspected.
+
+**Pitfall: Tool output truncation false positive**: `read_file`, `terminal`, and `execute_code` tools may truncate long paths in their output (e.g., `/root/.hermes/google_token.json` → `/root/...json`). This is a **display artifact only** — the actual file content is usually correct. Verify with raw file reads (e.g., `cat -n <file>`, Python `open()` with `repr()` per line, or hex byte checks) before attempting fixes. **Never use truncated tool output to write files**, as this can persist corruption (e.g., writing `/root/...json` as TOKEN_PATH). In Apr 2026, 10+ minutes were wasted "fixing" a TOKEN_PATH that was already correct; in May 2026, another 15+ minutes were lost to the same issue across multiple tools.
+
+**Pitfall: Reliable TOKEN_PATH fix when corrupted**: When TOKEN_PATH is truly corrupted (e.g., `***`, `/root/...json` truncated path, or invalid syntax), `patch` tool and `sed` may fail due to special characters or escaping issues. Use Python with regex to replace any TOKEN_PATH assignment regardless of current corruption pattern:
+```python
+import re
+with open('/root/.hermes/skills/ocas-weave/scripts/google_sync.py', 'rb') as f:
+    content = f.read()
+# Replace any TOKEN_PATH="<any value>" with the correct full path
+new_content = re.sub(
+    rb'TOKEN_PATH\s*=\s*"[^"]*"',
+    rb'TOKEN_PATH="/root/.hermes/google_token.json"',
+    content
+)
+with open('/root/.hermes/skills/ocas-weave/scripts/google_sync.py', 'wb') as f:
+    f.write(new_content)
+```
+Verify fix using byte-level checks (tool output like `grep`/`terminal` may truncate long paths):
+- Hexdump check: `hexdump -C /root/.hermes/skills/ocas-weave/scripts/google_sync.py | grep -A1 TOKEN_PATH`
+- Python byte check: `python3 -c "with open('script.py', 'rb') as f: c=f.read(); idx=c.find(b'TOKEN_PATH'); print(c[idx:idx+60])"`
+- **Wrong token file or dead refresh token (Apr 2026)**: The script at `/root/.hermes/skills/ocas-weave/scripts/google_sync.py` may point to the wrong token file, OR the token file may have a dead refresh token. Two distinct failure modes:
+1. **Wrong file path**: Script points to `jared_google_credentials.json` (lacks `contacts` scope) instead of `google_token.json` (has correct scopes).
+2. **Dead refresh token**: `google_token.json` has correct scopes including `contacts`, but the refresh token itself is expired/revoked (HTTP 400 `invalid_grant` — permanently dead, requires full re-auth).
+
+**Symptom**: Script fails with "Token refresh failed: HTTP Error 400: Bad Request" then 401 Unauthorized on the People API call.
+
+**Diagnosis**:
+1. Check which file the script reads: `grep TOKEN_PATH /root/.hermes/skills/ocas-weave/scripts/google_sync.py`
+2. Verify the token file's scopes: `python3 -c "import json; td=json.load(open('/root/.hermes/google_token.json')); print(td.get('scopes', []))"`
+3. Test refresh token validity (see `references/google-token-diagnostics.md`)
+4. Check alternate token file: `python3 -c "import json; td=json.load(open('/root/.hermes/jared_google_credentials.json')); print(td.get('scopes', []), 'has_refresh:', 'refresh_token' in td)"`
+
+**Fix**:
+- If wrong file: Patch `TOKEN_PATH` to `/root/.hermes/google_token.json`
+- If dead refresh token: Full re-auth required with `access_type=offline&prompt=consent`
+- If both files are problematic (e.g., `google_token.json` has scope but dead token, `jared_google_credentials.json` has alive token but no `contacts` scope): Full re-auth is required regardless. 
+
+**Cron job output when auth impossible**: Since no user is present to complete OAuth, the cron job MUST output a clear failure report (not `[SILENT]`). Format:
+```
+## Weave Google Contacts Sync Failed — Final Report
+
+**Status**: Failed — No valid OAuth token available
+**Root Cause**: Both token files have dead refresh tokens (invalid_grant)
+**Required Action (User Side)**: Run re-auth with access_type=offline&prompt=consent
+**Cron Job Note**: This sync will continue to fail until valid tokens are in place.
+```
+
+**Note**: `jared_google_credentials.json` may have a valid refresh token but lacks `contacts` scopes. Always verify scopes AND test refresh token before assuming the token is usable.
 - **Token expiry mid-run (silent refresh failure)**: The script's `get_access_token()` function has internal refresh logic, but it can fail silently — the refresh call may throw an exception that gets caught and logged to stdout (which is buffered for 90-120s), causing the script to fall through and return the expired token. When this happens, inbound succeeds (token was still valid) but outbound fails with HTTP 401 on most contacts. **Symptom**: Pushed ~118, Failed ~463, all 401s. **Fix**: Manually refresh the token before retrying:
   ```python
   python3 -c "
@@ -621,6 +710,7 @@ Both passes share the 90 req/min Google People API quota; outbound runs after in
   "
   ```
   Then re-run the sync script. The checkpoint system (`staging/outbound_ckpt.txt`) ensures the retry picks up where it left off — no duplicate pushes. **Why this works**: The refresh_token itself is valid; the issue is the script's internal refresh logic failing, not the credentials being revoked.
+- **Sync script corruption from write_file**: Using `execute_code`'s `write_file` tool to modify `google_sync.py` can introduce line number prefixes (e.g., `1|#!/usr/bin/env python3`) if the input `read_file` output includes line numbers (common with paginated read_file results). This causes `IndentationError` on script execution. A common corruption is the `TOKEN_PATH` line becoming `TOKEN_PATH=*** / 'google_token.json'` (invalid syntax). **Fix**: Always use direct Python file I/O or `sed` to modify the script, verify the first line is `#!/usr/bin/env python3` without leading whitespace, and check `grep TOKEN_PATH` for corruption. If corruption occurs, restore the script from the GitHub tarball using `gh api repos/indigokarasu/weave/tarball/main` to download the tarball and extract only the `scripts/` directory. For token diagnostic steps after fixing corruption, see `references/google-token-diagnostics.md`.
 
 
 ## Visibility
@@ -640,6 +730,8 @@ public
 | `references/connectors.md` | Before any sync with Google Contacts or Clay |
 | `references/vcard_projection.md` | Before weave.project.vcard |
 | `references/journal.md` | Before weave.journal; at end of every run |
+| `references/token-troubleshooting.md` | When diagnosing invalid_grant or missing scopes for Google Contacts sync |
+| `references/google-token-quick-check.md` | Quick pre-flight token validation script to run before sync |
 
 ## Update command
 

@@ -11,10 +11,11 @@ description: >
 metadata:
   author: Indigo Karasu
   email: mx.indigo.karasu@gmail.com
-  version: "3.3.0"
+  version: "3.3.2"
   hermes:
     tags: [social-graph, people, relationships]
     category: memory
+    required_commands: ["sherlock"]
     cron:
       - name: "weave:update"
         schedule: "25 7 * * *"
@@ -285,6 +286,8 @@ Every command that opens the database runs `_ensure_init()` first. No manual ini
 
 Read `references/init_pattern.md` for the `_open_db` implementation pattern. Full DDL is in `references/schemas.md`.
 
+**Config.json missing**: Health checks should verify `config.json` exists in `{agent_root}/commons/db/ocas-weave/`. If missing, run `weave.init` to trigger auto-creation via `_ensure_init()`, as health checks do not invoke database commands and thus do not trigger auto-init.
+
 
 ## Commands
 
@@ -310,11 +313,9 @@ Read `references/init_pattern.md` for the `_open_db` implementation pattern. Ful
 
 **weave.writeback.contacts** -- Push records to Google Contacts or Clay. Disabled by default. Requires config enablement AND per-action user approval.
 
-**weave.init** — Diagnostic and repair command. Checks schema, creates missing tables, verifies indexes. Use when troubleshooting, not as a prerequisite — the database initializes automatically on first use.
+**weave.init** -- Diagnostic and repair command. Checks schema, creates missing tables, verifies indexes. Use when troubleshooting, not as a prerequisite — the database initializes automatically on first use.
 
-**weave.maintenance** — Perform systematic database inspection, cleaning, and data quality validation. Detects corrupted data from enrichment scraper bugs, identifies orphaned nodes, finds duplicate Person records, validates data integrity before Google Contacts sync. Uses LadybugDB-specific query patterns to handle database quirks. Essential before any outbound sync to prevent bad data propagation.
-
-**weave.status** — Report graph health and config state. Shows Person/Preference/Fact/relationship counts, recent activity, missing field statistics, and data quality health. If commands fail, can fall back to direct LadybugDB queries to generate status from raw database state.
+**weave.status** -- Report graph health and config state.
 
 ```cypher
 CALL show_tables() RETURN *;
@@ -346,12 +347,30 @@ Every written fact requires: `source_type` (direct / inferred / imported / user-
 
 When enriching a contact, follow this strict order:
 
+0. **Pre-Search Seed Quality Check** — Before building any search query:
+   - Check the contact's `source_type` and `confidence`
+   - If `source_type` is `web_enrichment` and `confidence` < 0.8: **Reject all fields** (org, location, occupation). Use only trusted signals: `name`, `email`, `phone`
+   - If `source_type` is `imported`, `scout_research`, or `user_provided`: Use all provided fields for search context
+   - Search query must only include trusted signals: `name` (mandatory), `email` (mandatory), `phone` (area code hint), `location` (only if trusted)
+
 1. **Read** — Query Weave for the existing Person record. Confirm the record exists before any enrichment.
 2. **Search** — Use the searchx skill (SearXNG via `execute_code`) for web research. If SearchX is not available, fallback to the native `web_search` tool.
 3. **Enrich** — Add new Facts, Preferences, and relationship edges with full provenance (`source_type`, `source_ref`, `confidence`, `record_time`) on every write.
+   - **Scout Phase**: Use SearchX (SearXNG via `execute_code`) for identity-resolved research
+   - **Sift Phase**: Use Scrapling (v0.4.7+) with Playwright for JS-rendered pages, or platform APIs (GitHub API, Bluesky public API) for structured data. Do NOT use urllib static fetches.
+   - **Sherlock Phase**: Run `sherlock --print-found --no-color '<username>' --timeout 90` (required command). **Critical**: Sherlock finds USERNAMES, not verified profiles. You MUST verify 2+ data points for each result. Ignore username-only matches (different person with same handle).
+
+   - **High-Quality Propagation Rule**: If a VERIFIED profile (2+ data points) SELF-IDENTIFIES another social platform:
+     * Example: Verified GitHub bio says "Twitter: @handle" or links to Bluesky
+     * Example: Verified LinkedIn profile links to GitHub/Bluesky
+     * Example: Verified personal website/portfolio links to social platforms
+     THEN: Treat that linked platform as HIGH-QUALITY (no separate 2+ point check needed). The verification transfers from the trusted source to its self-linked profiles.
+     Note: If the linked platform is inaccessible (X.com blocks crawlers, account suspended), log it as "high-quality (linked from verified <source>) but inaccessible".
 4. **Write** — Persist changes to Weave via `MERGE` on Person nodes and `CREATE` on Fact/Preference nodes. Always read back after write to confirm success.
 5. **Search again** — With newly enriched data (company names, locations, titles), construct follow-up searches to find deeper information.
 6. **Sync** — After every Weave write that touches data mapped in `references/google-field-map.md`, immediately sync to Google Contacts. Never update one without mirroring the other.
+
+- **Pitfall: Separate enrichment skills**: Do not create separate enrichment skills (e.g., old `weave-enrichment-proper`). All Weave enrichment workflow must live in this skill. If a new enrichment-related skill is created accidentally, merge its content into this skill and delete the duplicate.
 
 ### Implicit Data from User Language
 
@@ -399,6 +418,12 @@ Before any outbound sync:
 - Store useful, durable, socially actionable facts only.
 - **No outbound sync without explicit per-sync user approval.**
 - Do NOT use notes field for structured data — Person.notes column was dropped from schema. All provenance, verification details, and metadata must be stored as Fact nodes with typed predicates. There is no catch-all text field in Weave.
+- **Pitfall: Sync script `notes` property references**: The `google_sync.py` script may retain deprecated references to the dropped `Person.notes` property, causing `Cannot find property notes for p` errors. Common locations to patch:
+  1. Inbound MERGE SET clauses: Remove `p.notes = CASE WHEN p.notes IS NULL OR p.notes = '' THEN $notes ELSE p.notes END` lines.
+  2. Inbound CREATE statements: Remove `notes: $notes` from `CREATE (p:Person { ... })` property list.
+  3. Outbound RETURN clauses: Remove `p.notes` from the `MATCH ... RETURN` list.
+  4. `build_contact_body` function: Remove `notes` from the parameter list and all calls to this function.
+  5. Cypher parameter dicts: Remove `"notes": notes` entries from all parameter dictionaries passed to `conn.execute()`.
 - Before outbound Google sync, verify Person-level fields are populated. Data stored in Fact nodes is NOT automatically synced to Google — the outbound sync reads Person fields (org, occupation, location_city, phone). Contacts with data only in Facts but not on the Person node will sync blank. Aggregation step required before outbound sync.
 - Surface lock errors immediately.
 - Write a journal at the end of every run. Runs missing journals are invalid.
@@ -472,14 +497,11 @@ On first invocation of any Weave command, `_open_db()` handles auto-initializati
 | Job name | Mechanism | Schedule | Command |
 |---|---|---|---|
 | `weave:update` | cron | `0 0 * * *` (midnight daily) | `weave.update` |
-| `weave:sync-google-inbound` | cron | `0 4 * * *` (4AM UTC) | `python3 {skill_root}/scripts/weave_sync_inbound.py` |
-| `weave:sync-google-outbound` | cron | `30 4 * * *` (4:30AM UTC) | `python3 {skill_root}/scripts/weave_sync_outbound.py` |
+| `weave:sync-google` | cron | `0 4 * * *` (4AM UTC) | `python3 {skill_root}/scripts/google_sync.py` |
 
-Stagger inbound and outbound by 30+ minutes to prevent quota contention on the 90 req/min Google People API ceiling.
+The `weave:sync-google` job runs `google_sync.py`, which performs the inbound pass (read all Google Contacts and gap-fill Weave) followed by the outbound pass (push Weave changes via BatchUpdateContacts) in a single invocation. Both passes share the 90 req/min Google People API ceiling, so they run sequentially with internal throttling rather than as separate jobs.
 
-The `weave:sync-google-inbound` job reads all Google Contacts and gap-fills Weave. The `weave:sync-google-outbound` job pushes Weave changes to Google using BatchUpdateContacts to minimize API calls.
-
-Manual invocation (`weave.sync.google-contacts`) runs both in sequence via `/root/.hermes/skills/ocas-weave/scripts/google_sync.py`.
+Manual invocation (`weave.sync.google-contacts`) runs `python3 {skill_root}/scripts/google_sync.py`, which performs inbound then outbound in sequence.
 
 ### Overnight Enrichment Pipeline
 
@@ -490,6 +512,19 @@ Progress: `/root/.hermes/data/weave-enrichment/progress.jsonl`
 **Re-processing pitfall**: The progress file tracks all contacted person IDs, but ~65% of searches return "no extractable data." If the filter excludes ALL progress-file IDs permanently, contacts that failed enrichment are never retried.
 
 **Do NOT filter by progress file at all.** The enrichment logic (`enrich_weave_contact`) only fills fields that are currently NULL/empty in the database — writing the same value twice is harmless. Filtering by progress entries caused a bug (Apr 2026): contacts with partial enrichment (e.g., `location_city` found, but `org` and `occupation` still missing) were permanently excluded because they had a non-empty `fields` entry in progress.jsonl. The simplest correct approach: query contacts with gaps directly from the database, skip no one, and let the SET clause only fill what's missing. The progress file should be used for logging/monitoring only, not for filtering candidates.
+
+**Progress file duplicate monitoring**: Health checks must verify progress.jsonl duplicate rate (unique contact IDs / total entries) stays below 10%. Higher rates indicate the script is incorrectly filtering by progress file. If duplicates exceed 10%, truncate progress.jsonl and patch the script to remove any progress-file-based filtering.
+  - Note: progress.jsonl uses the `id` field (not `contact_id`) for contact identifiers. When counting unique contact IDs, parse the `id` key from each JSON line in the file.
+  - Recurring errors in progress.jsonl (e.g., `Connection.execute() got unexpected keyword argument 'occupation'`) indicate script bugs; truncate the file to clear stale entries and patch the script.
+
+**Enrichment Pipeline Health Check**: Run these checks periodically (e.g., via cron) to verify pipeline health:
+1. Check if enrichment process is running: `ps aux | grep overnight_weave_enrichment | grep -v grep`
+2. If not running and before 6am PDT, restart: `python3 /root/.hermes/scripts/overnight_weave_enrichment.py`
+3. Check progress.jsonl duplicates: Count unique `id` values vs total entries; truncate if duplicate rate >10%
+4. Check enrichment stats: `cat /root/.hermes/data/weave-enrichment/stats.json`
+5. Check last sync time: `cat /root/.hermes/commons/db/ocas-weave/config.json | grep last_sync`
+6. Check recent sync activity: `tail -5 /root/.hermes/commons/data/ocas-weave/sync_log.jsonl`
+7. Verify Google token scopes: Ensure `contacts` (or full URI `https://www.googleapis.com/auth/contacts`) is present in token scopes.
 
 
 ## Self-update
@@ -513,14 +548,17 @@ Progress: `/root/.hermes/data/weave-enrichment/progress.jsonl`
 7. Output exactly: `I updated Weave from version {old} to {new}`
 
 
-## Google Contacts sync
+**Google Contacts sync**
 
-Weave maintains bidirectional sync with Google Contacts via two separate scripts (inbound and outbound run as independent cron jobs, staggered 30+ minutes apart to avoid quota contention):
+Weave maintains bidirectional sync with Google Contacts via a single script (`scripts/google_sync.py`) that runs both passes in sequence:
 
-- Inbound: `scripts/weave_sync_inbound.py` — Google Contacts → Weave
-- Outbound: `scripts/weave_sync_outbound.py` — Weave → Google Contacts
+- Inbound pass: Google Contacts → Weave
+- Outbound pass: Weave → Google Contacts (only if `writeback.google_contacts` is enabled in `config.json` and a previous `last_sync` checkpoint exists)
 
-**Why separate jobs?** Both inbound (paginated list of ALL contacts) and outbound (per-contact PATCH + etag GET) consume from the same 90 req/min Google People API quota. Running them sequentially causes cascading 429s. Staggering by 30+ minutes lets the quota window reset between runs.
+Both passes share the 90 req/min Google People API quota; outbound runs after inbound completes and uses BatchUpdateContacts to minimize calls.
+
+**Pre-flight check (recommended before manual or cron sync):**
+Run the token health check in `references/google-token-quick-check.md` to catch dead refresh tokens before attempting sync. A dead token (`invalid_grant`) will cause the sync to fail with HTTP 401 after starting.
 
 **Inbound:** Google Contacts → Weave. Match by `google_resource_name`, then email, then phone. Never match on name alone. Gap-fill only — Weave provenance wins. Two-pass: read-only lookup maps first, then write pass.
 
@@ -599,11 +637,57 @@ Weave maintains bidirectional sync with Google Contacts via two separate scripts
       body = e.read().decode()
       print(f'HTTP {e.code}: {body}')  # Look for invalid_grant
   ```
-- **Pre-sync scope verification**: Before attempting any People API call, verify the token's scopes include contacts. The credentials at `/root/.hermes/jared_google_credentials.json` may have been generated for Gmail/Calendar/Drive only (missing `contacts`, `contacts.readonly`, `contacts.other.readonly`). Check with: `python3 -c "import json; td=json.load(open('/root/.hermes/google_token.json')); print(td.get('scopes', []))"`. If contacts scopes are missing, the token must be re-authorized with the correct scopes — the old token cannot be patched.
-- **Script file corruption (TOKEN_PATH =***)**: The sync script at `/root/.hermes/skills/ocas-weave/scripts/google_sync.py` may have a corrupted line like `TOKEN_PATH=*** / 'google_token.json'` (invalid Python, literal asterisks in source). This appears to be caused by a sed or find-and-replace that targeted `Path.home()` or the actual path and replaced it with `***`. **Fix**: Patch to `TOKEN_PATH = HERMES_HOME / 'jared_google_credentials.json'`. Always verify the script parses correctly before running: `python3 -c "import ast; ast.parse(open('/root/.hermes/skills/ocas-weave/scripts/google_sync.py').read()); print('OK')"`. **Same corruption can affect `weave_contact_snapshots.py`** — always check both scripts when TOKEN_PATH corruption is suspected.
-- **google_sync.py truncated (missing main block)**: The file at `/root/.hermes/skills/ocas-weave/scripts/google_sync.py` was found truncated at exactly 500 lines — it ended mid-function with `sync_outbound()` missing its `return` statement, and there was no `main()` or `if __name__ == '__main__'` block. As of Apr 27 2026, the missing code has been patched in. **Manual sync**: Use `python3 scripts/run_sync.py` (imports from google_sync.py) or `python3 scripts/google_sync.py` (now has its own main block).
-- **Wrong token file with stale/expired credentials (Apr 2026)**: The script at `/root/.hermes/skills/ocas-weave/scripts/google_sync.py` historically pointed to `jared_google_token.json`. This file had (1) an expired/revoked refresh token (HTTP 400 `invalid_grant` — permanently dead, cannot be refreshed), (2) NO `contacts` OAuth scopes (scopes were gmail, calendar, drive only). **Symptom**: Script fails with "Token refresh failed: HTTP Error 400: Bad Request" then 401 Unauthorized on the People API call. **Diagnosis**: Check which file the script reads — `grep TOKEN_PATH /root/.hermes/skills/ocas-weave/scripts/google_sync.py`. Then verify the token file's scopes: `python3 -c "import json; td=json.load(open('/root/.hermes/google_token.json')); print(td.get('scopes', []))"`. The correct file is `google_token.json` which has all required scopes including `contacts`. **Fix**: Patch the script's `TOKEN_PATH` to point to `google_token.json`. Do NOT delete `jared_google_token.json` — it may have been used for other services. **Why two files exist**: The _indigo and Jared tokens are separate Google accounts; `google_token.json` is Jared's contacts account with full contacts scope.
-- **HTTP 403 "insufficient authentication scopes" despite valid token (May 2026)**: The Google People API may return HTTP 403 with "Request had insufficient authentication scopes" even when the OAuth token contains all required scopes (`contacts`, `contacts.readonly`, `contacts.other.readonly`) and is not expired. This appears to be an intermittent Google API issue. **Symptom**: Inbound sync succeeds completely, but outbound BatchUpdateContacts fails on all batches with 403 errors. **Diagnosis**: Verify token scopes with `python3 -c "import json; td=json.load(open('/root/.hermes/jared_google_credentials.json')); print(td.get('scopes', []))"` and expiry. **Workaround**: Retry the sync later as this is usually temporary. The snapshot system protects against data loss during failed outbound attempts.
+- **Pre-sync scope verification**: Before attempting any People API call, verify the token's scopes include contacts. The credentials at `/root/.hermes/jared_google_credentials.json` may have been generated for Gmail/Calendar/Drive only (missing `contacts`, `contacts.readonly`, `contacts.other.readonly`). Check with: `python3 -c "import json; td=json.load(open('/root/.hermes/google_token.json')); print(td.get('scopes', []))"`. If contacts scopes are missing, the token must be re-authorized with the correct scopes — the old token cannot be patched. For a complete diagnostic workflow including refresh token validity testing and re-auth steps, see `references/google-token-diagnostics.md`.
+  - Note: The full URI scope `https://www.googleapis.com/auth/contacts` is equivalent to the short `contacts` scope. When checking scopes, accept either form.
+**Script file corruption (TOKEN_PATH =*** or /root/...json)**: The sync script at `/root/.hermes/skills/ocas-weave/scripts/google_sync.py` may have a corrupted line like `TOKEN_PATH=*** / 'google_token.json'` (invalid Python, literal asterisks in source) or `TOKEN_PATH='/root/...json'` (truncated path from read_file output being persisted). These are caused by: 1) sed/find-and-replace targeting `Path.home()` or the actual path and replacing it with `***`, or 2) read_file truncation (displaying `/root/...json` instead of the full path) being written back to the script. **Fix**: Patch to `TOKEN_PATH = '/root/.hermes/google_token.json'`. Always verify the script parses correctly before running: `python3 -c "import ast; ast.parse(open('/root/.hermes/skills/ocas-weave/scripts/google_sync.py').read()); print('OK')"`. **Same corruption can affect `weave_contact_snapshots.py`** — always check both scripts when TOKEN_PATH corruption is suspected.
+
+**Pitfall: Tool output truncation false positive**: `read_file`, `terminal`, and `execute_code` tools may truncate long paths in their output (e.g., `/root/.hermes/google_token.json` → `/root/...json`). This is a **display artifact only** — the actual file content is usually correct. Verify with raw file reads (e.g., `cat -n <file>`, Python `open()` with `repr()` per line, or hex byte checks) before attempting fixes. **Never use truncated tool output to write files**, as this can persist corruption (e.g., writing `/root/...json` as TOKEN_PATH). In Apr 2026, 10+ minutes were wasted "fixing" a TOKEN_PATH that was already correct; in May 2026, another 15+ minutes were lost to the same issue across multiple tools.
+
+**Pitfall: Reliable TOKEN_PATH fix when corrupted**: When TOKEN_PATH is truly corrupted (e.g., `***`, `/root/...json` truncated path, or invalid syntax), `patch` tool and `sed` may fail due to special characters or escaping issues. Use Python with regex to replace any TOKEN_PATH assignment regardless of current corruption pattern:
+```python
+import re
+with open('/root/.hermes/skills/ocas-weave/scripts/google_sync.py', 'rb') as f:
+    content = f.read()
+# Replace any TOKEN_PATH="<any value>" with the correct full path
+new_content = re.sub(
+    rb'TOKEN_PATH\s*=\s*"[^"]*"',
+    rb'TOKEN_PATH="/root/.hermes/google_token.json"',
+    content
+)
+with open('/root/.hermes/skills/ocas-weave/scripts/google_sync.py', 'wb') as f:
+    f.write(new_content)
+```
+Verify fix using byte-level checks (tool output like `grep`/`terminal` may truncate long paths):
+- Hexdump check: `hexdump -C /root/.hermes/skills/ocas-weave/scripts/google_sync.py | grep -A1 TOKEN_PATH`
+- Python byte check: `python3 -c "with open('script.py', 'rb') as f: c=f.read(); idx=c.find(b'TOKEN_PATH'); print(c[idx:idx+60])"`
+- **Wrong token file or dead refresh token (Apr 2026)**: The script at `/root/.hermes/skills/ocas-weave/scripts/google_sync.py` may point to the wrong token file, OR the token file may have a dead refresh token. Two distinct failure modes:
+1. **Wrong file path**: Script points to `jared_google_credentials.json` (lacks `contacts` scope) instead of `google_token.json` (has correct scopes).
+2. **Dead refresh token**: `google_token.json` has correct scopes including `contacts`, but the refresh token itself is expired/revoked (HTTP 400 `invalid_grant` — permanently dead, requires full re-auth).
+
+**Symptom**: Script fails with "Token refresh failed: HTTP Error 400: Bad Request" then 401 Unauthorized on the People API call.
+
+**Diagnosis**:
+1. Check which file the script reads: `grep TOKEN_PATH /root/.hermes/skills/ocas-weave/scripts/google_sync.py`
+2. Verify the token file's scopes: `python3 -c "import json; td=json.load(open('/root/.hermes/google_token.json')); print(td.get('scopes', []))"`
+3. Test refresh token validity (see `references/google-token-diagnostics.md`)
+4. Check alternate token file: `python3 -c "import json; td=json.load(open('/root/.hermes/jared_google_credentials.json')); print(td.get('scopes', []), 'has_refresh:', 'refresh_token' in td)"`
+
+**Fix**:
+- If wrong file: Patch `TOKEN_PATH` to `/root/.hermes/google_token.json`
+- If dead refresh token: Full re-auth required with `access_type=offline&prompt=consent`
+- If both files are problematic (e.g., `google_token.json` has scope but dead token, `jared_google_credentials.json` has alive token but no `contacts` scope): Full re-auth is required regardless. 
+
+**Cron job output when auth impossible**: Since no user is present to complete OAuth, the cron job MUST output a clear failure report (not `[SILENT]`). Format:
+```
+## Weave Google Contacts Sync Failed — Final Report
+
+**Status**: Failed — No valid OAuth token available
+**Root Cause**: Both token files have dead refresh tokens (invalid_grant)
+**Required Action (User Side)**: Run re-auth with access_type=offline&prompt=consent
+**Cron Job Note**: This sync will continue to fail until valid tokens are in place.
+```
+
+**Note**: `jared_google_credentials.json` may have a valid refresh token but lacks `contacts` scopes. Always verify scopes AND test refresh token before assuming the token is usable.
 - **Token expiry mid-run (silent refresh failure)**: The script's `get_access_token()` function has internal refresh logic, but it can fail silently — the refresh call may throw an exception that gets caught and logged to stdout (which is buffered for 90-120s), causing the script to fall through and return the expired token. When this happens, inbound succeeds (token was still valid) but outbound fails with HTTP 401 on most contacts. **Symptom**: Pushed ~118, Failed ~463, all 401s. **Fix**: Manually refresh the token before retrying:
   ```python
   python3 -c "
@@ -628,6 +712,7 @@ Weave maintains bidirectional sync with Google Contacts via two separate scripts
   "
   ```
   Then re-run the sync script. The checkpoint system (`staging/outbound_ckpt.txt`) ensures the retry picks up where it left off — no duplicate pushes. **Why this works**: The refresh_token itself is valid; the issue is the script's internal refresh logic failing, not the credentials being revoked.
+- **Sync script corruption from write_file**: Using `execute_code`'s `write_file` tool to modify `google_sync.py` can introduce line number prefixes (e.g., `1|#!/usr/bin/env python3`) if the input `read_file` output includes line numbers (common with paginated read_file results). This causes `IndentationError` on script execution. A common corruption is the `TOKEN_PATH` line becoming `TOKEN_PATH=*** / 'google_token.json'` (invalid syntax). **Fix**: Always use direct Python file I/O or `sed` to modify the script, verify the first line is `#!/usr/bin/env python3` without leading whitespace, and check `grep TOKEN_PATH` for corruption. If corruption occurs, restore the script from the GitHub tarball using `gh api repos/indigokarasu/weave/tarball/main` to download the tarball and extract only the `scripts/` directory. For token diagnostic steps after fixing corruption, see `references/google-token-diagnostics.md`.
 
 
 ## Visibility
@@ -647,7 +732,9 @@ public
 | `references/connectors.md` | Before any sync with Google Contacts or Clay |
 | `references/vcard_projection.md` | Before weave.project.vcard |
 | `references/journal.md` | Before weave.journal; at end of every run |
-| `references/database_maintenance.md` | Before weave.maintenance or when troubleshooting data quality issues |
+| `references/token-troubleshooting.md` | When diagnosing invalid_grant or missing scopes for Google Contacts sync |
+| `references/google-token-quick-check.md` | Quick pre-flight token validation script to run before sync |
+| `references/google-token-diagnostics.md` | Full token diagnostic workflow: scope check, refresh token test, TOKEN_PATH verification |
 
 ## Update command
 
@@ -658,3 +745,489 @@ weave.update
 ```
 
 This pulls the latest version from GitHub and restarts the skill's background tasks if applicable.
+
+
+## Integrated: weave-db-maintenance
+
+
+# Weave Database Maintenance Skill
+
+## Purpose
+Perform systematic inspection, cleaning, and preparation of the Weave (LadybugDB) database to ensure data integrity before synchronization with Google Contacts or other systems.
+
+## When to Use
+- Before running Weave ↔ Google Contacts synchronization
+- When experiencing sync failures due to data quality issues
+- Periodic database health maintenance (monthly)
+- After importing large amounts of data containing inconsistencies
+- After the overnight enrichment scraper has run (known corruption bug)
+
+## LadybugDB Query Quirks (Critical)
+
+LadybugDB (embedded Cypher) has important differences from Neo4j Cypher:
+
+### Return Format
+- **`RETURN p`** (whole node): each row is a **dict** with properties + `_ID` and `_LABEL`
+- **`RETURN p.id, p.name, count(p)`** (column selectors): each row is a **list** (NOT dict)
+- Always check with `r.get_column_names()` before accessing columns
+- Access list rows by index: `row[cols.index('p.id')]` or hardcode `row[0]`
+
+### Unsupported Features
+| Feature | Workaround |
+|---------|------------|
+| `NOT EXISTS(...)` subquery | Use `OPTIONAL MATCH ... WHERE ... IS NULL` |
+| `type()` function | Not available — skip `type(r)` queries |
+| `randomUUID()` | Generate UUIDs in Python via `uuid.uuid4()` |
+| `CREATE INDEX IF NOT EXISTS` | Not supported — PKs are auto-indexed |
+| `EXISTS()` in WHERE | Not supported for relationship checks |
+
+### Row Iteration Pattern (large tables)
+```python
+def safe_get_all(conn, query):
+    r = conn.execute(query)
+    cols = r.get_column_names()
+    rows = []
+    while True:
+        try:
+            row = r.get_next()
+            rows.append(row)
+        except Exception as e:
+            if "No more tuples" in str(e):
+                break
+            if "utf-8" in str(e).lower():
+                continue  # skip corrupt row
+            raise
+    r.close()
+    return cols, rows
+```
+
+`r.get_next()` raises `Runtime exception: No more tuples in QueryResult` when exhausted — NOT `StopIteration`.
+
+### Database Locking Issues
+- `fuser -v /path/to/weave.lbug` shows which PID holds the lock
+- After a killed process (SIGTERM/SIGKILL), orphan processes may hold the lock
+- **Kill orphan**: `kill -9 <PID>` — repeat until `fuser` returns empty
+- **Stale WAL**: `rm -f /root/.hermes/commons/db/ocas-weave/weave.lbug.wal` after killed processes
+- The `.wal` file from a killed process is always stale; removing it is safe
+
+## Person Properties (for reference in queries)
+```
+id, name, name_given, name_family, email, phone,
+location_city, location_country, occupation, org, notes,
+google_resource_name, clay_id,
+source_type, source_ref, confidence,
+event_time, record_time, valid_from, valid_until
+```
+
+No `city`, `location_region`, or `company` properties — use exact names above.
+
+## Steps
+
+### 1. Database Inspection (via execute_code Python)
+
+```python
+from real_ladybug import Database, Connection
+import json
+
+db = Database("/root/.hermes/commons/db/ocas-weave/weave.lbug", read_only=True)
+conn = Connection(db)
+
+def safe_get_all(conn, query):
+    r = conn.execute(query)
+    cols = r.get_column_names()
+    rows = []
+    while True:
+        try:
+            row = r.get_next()
+            rows.append(row)
+        except Exception as e:
+            if "No more tuples" in str(e):
+                break
+            if "utf-8" in str(e).lower():
+                continue
+            raise
+    r.close()
+    return cols, rows
+```
+
+#### Basic Counts
+```python
+# Use column-selector pattern: count() returns list
+for label, query in [
+    ("person_count", "MATCH (p:Person) RETURN count(p)"),
+    ("preference_count", "MATCH (p:Preference) RETURN count(p)"),
+    ("fact_count", "MATCH (f:Fact) RETURN count(f)"),
+    ("knows_count", "MATCH ()-[r:Knows]->() RETURN count(r)"),
+    ("haspref_count", "MATCH ()-[r:HasPreference]->() RETURN count(r)"),
+    ("hasfact_count", "MATCH ()-[r:HasFact]->() RETURN count(r)"),
+]:
+    cols, rows = safe_get_all(conn, query)
+    print(f"{label}: {rows[0][0] if rows else 0}")
+```
+
+#### Null/Empty Field Detection
+```python
+# Null names
+cols, rows = safe_get_all(conn, "MATCH (p:Person) WHERE p.name IS NULL RETURN p.id, p.occupation, p.org, p.email")
+
+# Null occupations
+cols, rows = safe_get_all(conn, "MATCH (p:Person) WHERE p.occupation IS NULL OR p.occupation = '' RETURN p.id, p.name, p.org")
+
+# Null orgs
+r = conn.execute("MATCH (p:Person) WHERE p.org IS NULL OR p.org = '' RETURN count(p)")
+print(f"People missing org: {r.get_next()[0]}")  # list row!
+
+# Missing field summary
+for field in ["email", "phone", "org", "location_city"]:
+    cols, rows = safe_get_all(conn, f"MATCH (p:Person) WHERE p.{field} IS NULL OR p.{field} = '' RETURN count(p)")
+    print(f"Missing {field}: {rows[0][0] if rows else '?'}")
+```
+
+### 2. Detect Enrichment Scraper Corruption
+
+The overnight enrichment scraper has a known bug: it extracts substrings incorrectly, storing truncated/garbled text in occupation, org, and location_city. Run these checks after any enrichment cycle.
+
+#### Checks for Truncated Occupations (missing first chars)
+```python
+# Occupations that start with lowercase or mid-word — check in Python
+cols, rows = safe_get_all(conn, "MATCH (p:Person) WHERE p.occupation IS NOT NULL AND p.occupation <> '' RETURN p.id, p.name, p.occupation, p.org")
+import re
+for r in rows:
+    occ = r[2]
+    if occ and (re.match(r'^[a-z]', occ) or len(occ) < 5 or len(occ) > 200):
+        print(f"  SUSPICIOUS: {r[1]} occ='{occ[:80]}...'")
+```
+
+#### Checks for Fragment Orgs (enrichment got only first word)
+```python
+# Suspicious single-word orgs that aren't real company names
+suspicious_orgs = {
+    "Senior", "North", "Spring", "Work", "Product", "Finance",
+    "Serial", "Serving", "Greater", "Atlantic", "Alameda", "Dedham",
+    "Colorado", "Keystone", "Laurentian", "General", "Director",
+    "Lead", "Executive", "US", "CMO"
+}
+cols, rows = safe_get_all(conn, "MATCH (p:Person) WHERE p.org IS NOT NULL AND p.org <> '' RETURN p.id, p.name, p.org, p.occupation")
+for r in rows:
+    if r[2] and r[2] in suspicious_orgs:
+        print(f"  FRAGMENT ORG: {r[1]} org='{r[2]}' occ='{r[3]}'")
+```
+
+#### Checks for Occupation-as-Org (job title in org field)
+```python
+occupation_keywords = {"Senior", "Director", "Partner", "Lead", "Chief",
+                       "Head", "Principal", "Staff", "VP", "SVP", "EVP",
+                       "CMO", "CFO", "CTO", "CEO", "COO", "Managing",
+                       "Founder", "Co-Founder", "President", "Executive"}
+cols, rows = safe_get_all(conn, "MATCH (p:Person) WHERE p.org IS NOT NULL AND p.org <> '' RETURN p.id, p.name, p.org, p.occupation")
+for r in rows:
+    first = r[2].split()[0] if r[2] else ""
+    if first in occupation_keywords:
+        print(f"  OCC_IN_ORG: {r[1]} org='{r[2]}' occ='{r[3]}'")
+```
+
+#### Checks for Name in Occupation or City field
+```python
+cols, rows = safe_get_all(conn, "MATCH (p:Person) WHERE p.occupation IS NOT NULL OR p.location_city IS NOT NULL RETURN p.id, p.name, p.occupation, p.location_city, p.org")
+for r in rows:
+    name = (r[1] or "").lower()
+    occ = (r[2] or "").lower()
+    city = (r[3] or "").lower()
+    # Occupation contains the person's own first name
+    name_parts = name.split()
+    if occ and name_parts and name_parts[0] in occ:
+        print(f"  NAME_IN_OCC: {r[1]} occ='{r[2]}'")
+    # City contains name (e.g. "Heather Scoville Ladora, IA")
+    if city and name_parts and (name_parts[0] in city or (len(name_parts) > 1 and name_parts[-1] in city)):
+        print(f"  NAME_IN_CITY: {r[1]} city='{r[3]}'")
+```
+
+#### Checks for Bios/LinkedIn Text in Occupation
+```python
+cols, rows = safe_get_all(conn, "MATCH (p:Person) WHERE p.occupation IS NOT NULL AND p.occupation <> '' RETURN p.id, p.name, p.occupation")
+for r in rows:
+    occ = r[2]
+    if occ and len(occ) > 80:
+        print(f"  LONG_OCC: {r[1]} len={len(occ)} '{occ[:80]}...'")
+    # LinkedIn post text commonly starts with "LinkedIn"
+    if occ and occ.lower().startswith("linkedin"):
+        print(f"  LINKEDIN_TEXT: {r[1]} occ='{occ[:80]}...'")
+```
+
+### 3. Duplicate Detection
+
+#### By Email (most reliable)
+```python
+cols, rows = safe_get_all(conn, """
+    MATCH (p:Person) WHERE p.email IS NOT NULL AND p.email <> ''
+    WITH p.email AS email, count(p) AS cnt,
+         collect(p.id) AS ids, collect(p.name) AS names,
+         collect(p.org) AS orgs
+    WHERE cnt > 1
+    RETURN email, cnt, ids, names, orgs
+""")
+print(f"Duplicate emails: {len(rows)}")
+for r in rows[:5]:
+    for i in range(r[1]):
+        print(f"  {r[0]}: id={r[2][i]} name={r[3][i]} org={r[4][i]}")
+```
+
+#### By Name (same name, different IDs — complementary)
+```python
+cols, rows = safe_get_all(conn, """
+    MATCH (p:Person) WHERE p.name IS NOT NULL AND p.name <> ''
+    WITH p.name AS name, count(p) AS cnt,
+         collect(p.id) AS ids, collect(p.org) AS orgs, collect(p.email) AS emails
+    WHERE cnt > 1
+    RETURN name, cnt, ids, orgs, emails ORDER BY cnt DESC
+""")
+```
+
+### 4. Orphan Detection (nodes with no person edges)
+
+Use OPTIONAL MATCH instead of NOT EXISTS (unsupported in LadybugDB):
+
+```python
+# Orphan Preferences
+cols, rows = safe_get_all(conn, """
+    MATCH (pref:Preference)
+    OPTIONAL MATCH (person:Person)-[:HasPreference]->(pref)
+    WITH pref, person WHERE person.id IS NULL
+    RETURN pref.id, pref.category, pref.value
+""")
+
+# Orphan Facts
+cols, rows = safe_get_all(conn, """
+    MATCH (f:Fact)
+    OPTIONAL MATCH (person:Person)-[:HasFact]->(f)
+    WITH f, person WHERE person.id IS NULL
+    RETURN f.id, f.predicate, f.value
+""")
+```
+
+### 5. Data Cleanup Operations
+
+#### Clear Corrupted Fields
+```python
+def execute(conn, query, params=None):
+    r = conn.execute(query, params or {})
+    try:
+        while True:
+            r.get_next()
+    except Exception:
+        pass
+    r.close()
+
+# Clear truncated occupations
+for pid, field in [(JARED_UUID, "occupation")]:
+    execute(conn, f"MATCH (p:Person {{id: $id}}) SET p.{field} = ''", {"id": pid})
+
+# Clear fragment orgs
+for pid in FRAGMENT_IDS:
+    execute(conn, f"MATCH (p:Person {{id: $id}}) SET p.org = ''", {"id": pid})
+
+# Clear garbage city field
+for pid in GARBAGE_CITY_IDS:
+    execute(conn, f"MATCH (p:Person {{id: $id}}) SET p.location_city = ''", {"id": pid})
+```
+
+#### Delete Null-Name Isolated Records
+```python
+# First check they have no relationships
+for pid in null_name_ids:
+    cols, rows = safe_get_all(conn, f"""
+        OPTIONAL MATCH (p:Person {{id: '{pid}'}})-[r:Knows]->()
+        OPTIONAL MATCH (p)-[r2:HasPreference]->()
+        OPTIONAL MATCH (p)-[r3:HasFact]->()
+        RETURN count(r) + count(r2) + count(r3)
+    """)
+    if rows and rows[0][0] == 0:
+        execute(conn, f"MATCH (p:Person {{id: '{pid}'}}) DETACH DELETE p")
+```
+
+#### Delete Orphan Preferences/Facts
+```python
+# Delete orphan preferences
+r = conn.execute("""
+    MATCH (pref:Preference)
+    OPTIONAL MATCH (person:Person)-[:HasPreference]->(pref)
+    WITH pref, person WHERE person.id IS NULL
+    RETURN pref.id
+""")
+orphan_ids = []
+while True:
+    try:
+        row = r.get_next()
+        orphan_ids.append(row[0])
+    except Exception as e:
+        if "No more tuples" in str(e):
+            break
+        raise
+r.close()
+
+for pid in orphan_ids:
+    execute(conn, f"MATCH (p:Preference {{id: '{pid}'}}) DELETE p")
+
+# Same pattern for orphan Facts
+```
+
+### 6. Validation After Cleanup
+
+```python
+# Null names: should be 0 after cleanup
+cols, rows = safe_get_all(conn, "MATCH (p:Person) WHERE p.name IS NULL RETURN count(p)")
+print(f"Null names: {rows[0][0] if rows else 0}")
+
+# Orphan preferences: should be 0
+cols, rows = safe_get_all(conn, """
+    MATCH (pref:Preference)
+    OPTIONAL MATCH (person:Person)-[:HasPreference]->(pref)
+    WITH pref, person WHERE person.id IS NULL
+    RETURN count(pref)
+""")
+print(f"Orphan pref: {rows[0][0] if rows else 0}")
+
+# Orphan facts: should be 0
+cols, rows = safe_get_all(conn, """
+    MATCH (f:Fact)
+    OPTIONAL MATCH (person:Person)-[:HasFact]->(f)
+    WITH f, person WHERE person.id IS NULL
+    RETURN count(f)
+""")
+print(f"Orphan facts: {rows[0][0] if rows else 0}")
+```
+
+### 7. Snapshot Before Cleanup (optional)
+```bash
+cp /root/.hermes/commons/db/ocas-weave/weave.lbug \
+   /root/.hermes/commons/db/ocas-weave/snapshots/weave-$(date +%Y%m%d-%H%M%S).lbug
+```
+
+## Key Considerations
+
+### Safe Deletion Criteria
+Only delete Person nodes when:
+- Name is null AND
+- No relationships of any type exist (Knows, HasPreference, HasFact)
+- Verified via check above
+
+Only delete orphan Preferences/Facts when confirmed disconnected from Person.
+
+### Relationship Preservation
+- **Knows edges**: never delete these — they link two real people
+- **HasPreference/HasFact**: check person_id before deleting nodes, not edges
+- Never `DETACH DELETE` a person with Knows edges unless you've confirmed it's a true duplicate
+
+### What to Clear vs What to Delete
+- **Corrupted occupation/org/city**: SET to empty string `''`
+- **Garbage notes field**: SET to empty string
+- **Null-name isolated Person**: DETACH DELETE
+- **Orphan Preference/Fact with no Person edge**: DELETE
+- **Duplicate Person with Knows edges**: MERGE properties into survivor, transfer edges, DELETE duplicate
+
+## Known Data Corruption Patterns (from enrichment bug, discovered Apr 2026)
+
+| Pattern | Example | Fix |
+|---------|---------|-----|
+| Occupation missing first chars | `'r Vice President Product and Exper'` | Clear field |
+| Occupation mid-string | `'ing ManagerDesign'` | Clear field |
+| LinkedIn text stored as occupation | `'LinkedIn Excited to start'` / `'LinkedIn sr vp'` | Clear field |
+| Bio instead of occupation | `'Exciting progress as the foundation is being poured'` | Clear field |
+| Person's own name in occupation | `'Benjamin Brown'` / `'Heather Scoville'` | Clear field |
+| Single-word fragment org | `'Greater'`, `'Atlantic'`, `'Serving'`, `'Senior'` | Clear org |
+| Job title in org field | `org='Senior'`, `org='CMO'`, `org='Director'` | Clear org |
+| Person's own name in org | `'Jeffrey Hutchison & Associates'` | Clear org |
+| Surname in org field | `'Georgeson'` (not a company) | Clear org |
+| Name+location in city field | `'Heather Scoville Ladora, IA'` | Clear city |
+| Occupation-as-org | org='Senior'/'Product'/'Finance'/'General' | Clear org |
+
+## Fact Node Creation (LadybugDB-Specific)
+
+LadybugDB **does not support MERGE** for creating nodes with unknown properties. The `CREATE (f:Fact {...})` pattern requires ALL node properties to be specified at creation time, including `id`. MERGE with `ON CREATE SET` fails with "expects primary key id as input".
+
+### Correct Pattern for Creating Facts
+
+```python
+import uuid
+from real_ladybug import Database, Connection
+
+db = Database(DB_PATH)  # read_only=False
+conn = Connection(db)
+
+# 1. CREATE the Fact node with ALL properties including id
+fact_id = str(uuid.uuid4())
+conn.execute(f"""
+    CREATE (f:Fact {{id: '{fact_id}', predicate: 'predicate_name', value: 'some value',
+        source_type: 'system', source_ref: 'reference_tag',
+        confidence: 0.9, record_time: '{now}'}})
+""")
+
+# 2. CREATE the relationship separately (HasFact has NO properties)
+conn.execute(f"""
+    MATCH (p:Person {{id: '{person_id}'}}), (f:Fact {{id: '{fact_id}'}})
+    CREATE (p)-[:HasFact]->(f)
+""")
+
+# 3. For updating existing facts, use SET:
+conn.execute(f"""
+    MATCH (p:Person {{id: '{person_id}'}})-[:HasFact]->(f:Fact {{predicate: 'predicate_name'}})
+    SET f.value = 'new value', f.record_time = '{now}'
+""")
+
+# 4. To check if a fact exists before creating:
+r = conn.execute("""
+    MATCH (p:Person {id: $person_id})-[:HasFact]->(f:Fact {predicate: 'predicate_name'})
+    RETURN count(f)
+""", {'person_id': person_id})
+existing = r.get_next()[0] if r.get_next() else 0
+```
+
+**Key rules:**
+- `value` must be a string (even for numbers: `'7.7'` not `7.7`)
+- `confidence` must be a float (0.0-1.0)
+- Relationship `HasFact` has **no properties** (no `fact_key`)
+- Always use parameterized queries to prevent SQL injection
+
+## System Fact Nodes (Quality & Enrichment Tracking)
+
+Two system Fact predicates track data quality and enrichment status (created Apr 2026):
+
+### data_quality_score (0-10 scale)
+```python
+# Score calculation considers:
+# - Full name: 0.75 points
+# - Contact methods: email (0.25), phone (0.5), custom email domain (0.25 bonus)
+# - Multiple contact methods: 0.5 bonus
+# - Work data: org (0.5), occupation (0.5)
+# - Location: city (0.5), country (0.25)
+# - Socials from Facts: up to 2.0 points
+# - Family/relationships from Facts: up to 1.5 points
+# - Career history from Facts: up to 1.0 points
+# - Interests from Facts: up to 1.0 points
+# - Education from Facts: up to 0.5 points
+# - Content/publications from Facts: up to 0.5 points
+# - Enrichment source quality: up to 1.5 points
+# Total capped at 10.0
+```
+
+### enrichment_status
+- `enriched` — properly researched via Scout methodology (44 contacts)
+- `enriched_corrupt` — old web_enrichment pipeline (broken data) (534 contacts)
+- `not_enriched` — untouched since Google import (453 contacts)
+
+These Facts are internal to Weave and **do not sync** to Google Contacts (sync only exports Person-level fields).
+
+## Real-World Scale (Apr 2026 pass)
+- 1,036 Person nodes → 1,031 after cleanup (5 null-name deleted)
+- 52 orphan Preferences deleted, 18 orphan Facts deleted
+- 14 corrupted occupation fields cleared
+- 12 fragment org fields cleared
+- 2 garbage city fields cleared
+- 46 email-based duplicate pairs identified (not auto-merged)
+- 73 people missing occupations, 22 missing orgs, 251 missing emails, 464 missing phones
+
+## References
+- LadybugDB documentation for Cypher syntax
+- Weave sync scripts in `/root/.hermes/scripts/`
+- Weave database at `/root/.hermes/commons/db/ocas-weave/weave.lbug`
+- Schema reference: `skill_view('ocas-weave', 'references/schemas.md')`

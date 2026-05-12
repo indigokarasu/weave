@@ -8,10 +8,12 @@ mapped fields. Never syncs partial data.
 
 import json, urllib.request, urllib.parse, time, sys, os
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
-DB = os.path.expanduser("~/.hermes/commons/db/ocas-weave/weave.lbug")
-TOKEN_PATH = os.path.expanduser("~/.hermes/google_token.json")
-LOG_DIR = os.path.expanduser("~/.hermes/data/weave-google-sync")
+AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
+DB = str(AGENT_ROOT / "commons/db/ocas-weave/weave.lbug")
+TOKEN_PATH = str(AGENT_ROOT / "google_token.json")
+LOG_DIR = str(AGENT_ROOT / "data/weave-google-sync")
 os.makedirs(LOG_DIR, exist_ok=True)
 
 def get_token():

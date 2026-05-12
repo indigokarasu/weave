@@ -9,6 +9,7 @@ in execute_code and background process environments.
 """
 
 import json
+import os
 import sys
 import time
 import uuid
@@ -19,11 +20,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Paths
-HERMES_HOME = Path.home() / '.hermes'
-DB_PATH = HERMES_HOME / 'commons/db/ocas-weave/weave.lbug'
-CONFIG_PATH = HERMES_HOME / 'commons/data/ocas-weave/config.json'
+AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
+DB_PATH = AGENT_ROOT / 'commons/db/ocas-weave/weave.lbug'
+CONFIG_PATH = AGENT_ROOT / 'commons/data/ocas-weave/config.json'
 # owner's Google account for contacts sync
-TOKEN_PATH = HERMES_HOME / 'owner_google_credentials.json'
+TOKEN_PATH = AGENT_ROOT / 'owner_google_credentials.json'
 PEOPLE_API_BASE = 'https://people.googleapis.com/v1'
 
 def _log(msg):
@@ -269,7 +270,7 @@ def sync_outbound(db, token, last_sync_at):
     conn = lb.Connection(db)
 
     # Checkpoint file for resumable outbound sync
-    ckpt_path = HERMES_HOME / 'commons/db/ocas-weave/staging/outbound_ckpt.txt'
+    ckpt_path = AGENT_ROOT / 'commons/db/ocas-weave/staging/outbound_ckpt.txt'
     pushed_set = set()
     if ckpt_path.exists():
         pushed_set = set(l for l in ckpt_path.read_text().strip().split('\n') if l)

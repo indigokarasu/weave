@@ -16,10 +16,11 @@ from pathlib import Path
 from datetime import datetime
 
 # Configuration
-WEAVE_DATA = Path("<hermes-root>/commons/data/weave-enrichment-control")
+AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
+WEAVE_DATA = AGENT_ROOT / "commons/data/weave-enrichment-control"
 STATE_FILE = WEAVE_DATA / "state.json"
 PID_FILE = WEAVE_DATA / "enrichment.pid"
-LOG_FILE = Path("<hermes-root>/logs/weave-enrichment.log")
+LOG_FILE = AGENT_ROOT / "logs/weave-enrichment.log"
 
 def ensure_dirs():
     """Ensure required directories exist"""

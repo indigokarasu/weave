@@ -8,9 +8,11 @@ import time
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from urllib.error import HTTPError
 
-TOKEN_PATH = "<hermes-root>/owner_google_token.json"
+AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
+TOKEN_PATH = str(AGENT_ROOT / "owner_google_token.json")
 BASE = "https://people.googleapis.com/v1"
 
 # Known social site → canonical label
@@ -227,7 +229,7 @@ def main():
             print(f"    '{u['old']}' → '{u['new']}'  ({u['url']})")
 
     # Apply fixes
-    CKPT_PATH = "<hermes-root>/data/url-label-fix/ckpt.txt"
+    CKPT_PATH = str(AGENT_ROOT / "data/url-label-fix/ckpt.txt")
     os.makedirs(os.path.dirname(CKPT_PATH), exist_ok=True)
     done = set()
     if os.path.exists(CKPT_PATH):

@@ -40,9 +40,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Paths
-HERMES_HOME = Path.home() / '.hermes'
-SNAPSHOTS_DIR = HERMES_HOME / 'commons/db/ocas-weave/snapshots'
-TOKEN_PATH = HERMES_HOME / 'owner_google_credentials.json'
+AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
+SNAPSHOTS_DIR = AGENT_ROOT / 'commons/db/ocas-weave/snapshots'
+TOKEN_PATH = AGENT_ROOT / 'owner_google_credentials.json'
 PEOPLE_API_BASE = 'https://people.googleapis.com/v1'
 
 # Fields to snapshot (all mutable contact fields)

@@ -28,8 +28,10 @@ SEARCH_DELAY = 3        # Seconds between searches
 SYNC_EVERY = 30         # Sync to Google after this many enriched contacts
 DEADLINE_HOUR_ET = 8    # Stop at 8am ET
 SEARXNG_URL = "http://localhost:8888/search"
-PROGRESS_FILE = "<hermes-root>/data/weave-enrichment/progress.jsonl"
-STATS_FILE = "<hermes-root>/data/weave-enrichment/stats.json"
+from pathlib import Path
+AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
+PROGRESS_FILE = str(AGENT_ROOT / "data/weave-enrichment/progress.jsonl")
+STATS_FILE = str(AGENT_ROOT / "data/weave-enrichment/stats.json")
 
 # Minimum confidence threshold for writing data
 MIN_CONFIDENCE = 0.7
@@ -98,7 +100,7 @@ def searxng_search(query, limit=3):
 def get_contacts_needing_enrichment():
     """Query Weave for contacts with gaps, excluding user-provided data."""
     import real_ladybug as lb
-    db = lb.Database("<hermes-root>/commons/db/ocas-weave/weave.lbug", read_only=True)
+    db = lb.Database(str(AGENT_ROOT / "commons/db/ocas-weave/weave.lbug"), read_only=True)
     conn = lb.Connection(db)
     
     cypher = """
@@ -343,7 +345,7 @@ def enrich_weave_contact(contact_id, enrichment_data, confidence=0.7, person_nam
     if not enrichment_data:
         return False
     
-    db = lb.Database("<hermes-root>/commons/db/ocas-weave/weave.lbug", read_only=False)
+    db = lb.Database(str(AGENT_ROOT / "commons/db/ocas-weave/weave.lbug"), read_only=False)
     conn = lb.Connection(db)
     
     written = 0
@@ -401,7 +403,7 @@ def sync_to_google():
     log("Syncing to Google Contacts...")
     try:
         result = subprocess.run(
-            ["python3", "<hermes-root>/skills/ocas-weave/scripts/google_sync.py"],
+            ["python3", str(AGENT_ROOT / "skills/ocas-weave/scripts/google_sync.py")],
             capture_output=True, text=True, timeout=300
         )
         if result.returncode == 0:

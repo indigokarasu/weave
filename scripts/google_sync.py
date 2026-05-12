@@ -9,6 +9,7 @@ in execute_code and background process environments.
 """
 
 import json
+import os
 import sys
 import time
 import uuid
@@ -19,12 +20,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Paths
-HERMES_HOME = Path.home() / '.hermes'
-DB_PATH = HERMES_HOME / 'commons/db/ocas-weave/weave.lbug'
-CONFIG_PATH = HERMES_HOME / 'commons/db/ocas-weave/config.json'
+AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
+DB_PATH = AGENT_ROOT / 'commons/db/ocas-weave/weave.lbug'
+CONFIG_PATH = AGENT_ROOT / 'commons/data/ocas-weave/config.json'
 # owner's Google account for contacts sync
-TOKEN_PATH = HERMES_HOME / 'owner_google_credentials.json'
-
+TOKEN_PATH = AGENT_ROOT / 'owner_google_credentials.json'
 PEOPLE_API_BASE = 'https://people.googleapis.com/v1'
 
 def _log(msg):
@@ -59,6 +59,9 @@ def get_access_token():
     if expiry_str:
         try:
             expiry = datetime.fromisoformat(expiry_str.replace('Z', '+00:00'))
+            # Ensure expiry is timezone-aware for comparison with timezone-aware now
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
             expired = datetime.now(timezone.utc) >= expiry
         except (ValueError, TypeError):
             pass
@@ -215,13 +218,12 @@ def sync_inbound(db, token):
                     p.occupation = CASE WHEN p.occupation IS NULL OR p.occupation = '' THEN $title ELSE p.occupation END,
                     p.location_city = CASE WHEN p.location_city IS NULL OR p.location_city = '' THEN $city ELSE p.location_city END,
                     p.location_country = CASE WHEN p.location_country IS NULL OR p.location_country = '' THEN $country ELSE p.location_country END,
-                    p.notes = CASE WHEN p.notes IS NULL OR p.notes = '' THEN $notes ELSE p.notes END,
                     p.google_resource_name = CASE WHEN p.google_resource_name IS NULL THEN $rn ELSE p.google_resource_name END,
                     p.record_time = $now
             """, {
                 "id": pid, "name": name, "given": given, "family": family,
                 "email": email, "phone": phone, "org": org, "title": title_val,
-                "city": city, "country": country, "notes": notes, "rn": rn, "now": now
+                "city": city, "country": country, "rn": rn, "now": now
             })
             enriched += 1
         else:
@@ -230,14 +232,14 @@ def sync_inbound(db, token):
                 CREATE (p:Person {
                     id: $id, name: $name, name_given: $given, name_family: $family,
                     email: $email, phone: $phone, location_city: $city, location_country: $country,
-                    occupation: $title, org: $org, notes: $notes,
+                    occupation: $title, org: $org,
                     google_resource_name: $rn, source_type: 'imported', source_ref: $rn,
                     confidence: 0.8, record_time: $now
                 })
             """, {
                 "id": pid, "name": name, "given": given, "family": family,
                 "email": email, "phone": phone, "org": org, "title": title_val,
-                "city": city, "country": country, "notes": notes, "rn": rn, "now": now
+                "city": city, "country": country, "rn": rn, "now": now
             })
             created += 1
         upserted += 1
@@ -268,7 +270,7 @@ def sync_outbound(db, token, last_sync_at):
     conn = lb.Connection(db)
 
     # Checkpoint file for resumable outbound sync
-    ckpt_path = HERMES_HOME / 'commons/db/ocas-weave/staging/outbound_ckpt.txt'
+    ckpt_path = AGENT_ROOT / 'commons/db/ocas-weave/staging/outbound_ckpt.txt'
     pushed_set = set()
     if ckpt_path.exists():
         pushed_set = set(l for l in ckpt_path.read_text().strip().split('\n') if l)
@@ -299,7 +301,7 @@ def sync_outbound(db, token, last_sync_at):
         WHERE p.record_time > $ts
           AND (p.source_type IS NULL OR p.source_type <> 'imported')
         RETURN p.google_resource_name, p.name_given, p.name_family,
-               p.email, p.phone, p.org, p.occupation, p.location_city, p.location_country, p.notes,
+               p.email, p.phone, p.org, p.occupation, p.location_city, p.location_country,
                p.id
     """, {"ts": last_sync_at}))
 
@@ -316,7 +318,7 @@ def sync_outbound(db, token, last_sync_at):
     all_creates = []  # List of (body, pid)
     skipped = 0
 
-    def build_contact_body(rn, given, family, email, phone, org, title, city, country, notes, pid):
+    def build_contact_body(rn, given, family, email, phone, org, title, city, country, pid):
         """Build a Google Contacts API body dict from Weave person fields."""
         phone_clean = _validate_phone(phone)
 
@@ -360,15 +362,15 @@ def sync_outbound(db, token, last_sync_at):
         # Skip notes - do NOT write to Google Contacts biographies field
         return body
 
-    for rn, given, family, email, phone, org, title, city, country, notes, pid in to_update:
-        body = build_contact_body(rn, given, family, email, phone, org, title, city, country, notes, pid)
+    for rn, given, family, email, phone, org, title, city, country, pid in to_update:
+        body = build_contact_body(rn, given, family, email, phone, org, title, city, country, pid)
         if not body:
             skipped += 1
             continue
         all_updates.append((rn, body, [], pid))
 
-    for rn, given, family, email, phone, org, title, city, country, notes, pid in to_create:
-        body = build_contact_body(rn, given, family, email, phone, org, title, city, country, notes, pid)
+    for rn, given, family, email, phone, org, title, city, country, pid in to_create:
+        body = build_contact_body(rn, given, family, email, phone, org, title, city, country, pid)
         if not body:
             skipped += 1
             continue
@@ -378,7 +380,7 @@ def sync_outbound(db, token, last_sync_at):
 
     # === SAFEGUARD: Snapshot current Google state before any modifications ===
     try:
-        from weave_contact_snapshots import create_snapshot
+        from contact_snapshots import create_snapshot
         rn_list_for_snapshot = [rn for rn, *_ in all_updates]
         person_id_map = {rn: pid for rn, _, _, pid in all_updates}
         sync_id = f"outbound_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -500,141 +502,91 @@ def sync_outbound(db, token, last_sync_at):
                 failed += len(contacts_map)
                 break
 
-    # === CREATE new contacts in Google (Weave has data, Google doesn't) ===
-    created = 0
-    create_failed = 0
-    if all_creates:
-        _log(f'  Outbound: creating {len(all_creates)} new contacts in Google Contacts...')
-        for body, pid in all_creates:
-            try:
-                req = urllib.request.Request(
-                    f'{PEOPLE_API_BASE}/people:createContact',
-                    data=json.dumps(body).encode(),
-                    headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
-                    method='POST'
-                )
-                resp = urllib.request.urlopen(req, timeout=30)
-                result = json.loads(resp.read())
-                resource_name = result.get('resourceName', '')
-                if resource_name:
-                    conn.execute(
-                        "MATCH (p:Person {id: $id}) SET p.google_resource_name = $rn",
-                        {"id": pid, "rn": resource_name}
-                    )
-                    created += 1
-                    _log(f'    Created: {resource_name} ({body.get("names", [{}])[0].get("givenName", "")} {body.get("names", [{}])[0].get("familyName", "")})')
-                else:
-                    create_failed += 1
-            except urllib.error.HTTPError as e:
-                err_body = ''
-                try:
-                    err_body = e.read().decode()[:200]
-                except:
-                    pass
-                _log(f'    Create failed HTTP {e.code}: {err_body}')
-                create_failed += 1
-            except Exception as e:
-                _log(f'    Create failed: {e}')
-                create_failed += 1
-            time.sleep(0.5)  # Rate limit for individual creates
-        _log(f'  Outbound: {created} created, {create_failed} failed')
+    if ckpt_path.exists() and len(pushed_set) == 0 and pushed > 0:
+        pass  # Keep checkpoint for resume-ability but don't delete here
 
-    # Clean up checkpoint on successful completion
-    ckpt_path.unlink(missing_ok=True)
+    return {
+        "outbound_pushed": pushed,
+        "outbound_failed": failed,
+        "outbound_skipped": skipped,
+        "outbound_stale": stale,
+        "outbound_rate_limited": rate_limited,
+        "outbound_created": len(all_creates)
+    }
 
-    return {"outbound_pushed": pushed, "outbound_failed": failed, "outbound_skipped": skipped, "outbound_stale": stale, "outbound_rate_limited": rate_limited, "outbound_created": created, "snapshot_file": str(snapshot_file) if snapshot_file else None}
 
 def main():
+    _log("=" * 60)
+    _log("Weave Google Contacts Sync")
+    _log(f"Started at: {datetime.now(timezone.utc).isoformat()}")
+    _log("=" * 60)
+
+    token = get_access_token()
+    if not token:
+        _log("ERROR: Failed to get access token")
+        sys.exit(1)
+
+    import real_ladybug as lb
+    _log("Opening Weave database...")
+    db = lb.Database(str(DB_PATH))
+
     config = load_config()
-    writeback_enabled = config.get('writeback', {}).get('google_contacts', False)
+    last_sync_at = config.get("last_sync", {}).get("google_contacts")
 
-    if not writeback_enabled:
-        _log("Writeback is disabled. Set writeback.google_contacts=true in config.json to enable outbound sync.")
-        writeback_enabled = False
-
+    _log("\n[Inbound] Google Contacts → Weave...")
     try:
-        import real_ladybug as lb
-    except ImportError:
-        print("ERROR: real_ladybug package not installed. Install with: pip install real_ladybug", file=sys.stderr)
-        sys.exit(1)
-
-    if not DB_PATH.exists():
-        print(f"ERROR: Weave database not found at {DB_PATH}", file=sys.stderr)
-        sys.exit(1)
-
-    try:
-        token = get_access_token()
+        result_in = sync_inbound(db, token)
+        _log(f"Inbound: upserted={result_in.get('inbound_upserted', '?')} enriched={result_in.get('inbound_enriched', '?')} created={result_in.get('inbound_created', '?')} skipped={result_in.get('inbound_skipped', '?')}")
     except Exception as e:
-        print(f"ERROR: Failed to get Google credentials: {e}", file=sys.stderr)
-        sys.exit(1)
+        _log(f"ERROR inbound: {e}")
+        import traceback
+        _log(traceback.format_exc())
 
-    db = lb.Database(str(DB_PATH), read_only=False)
-
-    try:
-        last_sync = config.get('last_sync', {}).get('google_contacts')
-
-        # 1. Inbound sync (always runs)
-        _log("=== INBOUND SYNC: Google Contacts → Weave ===")
-        inbound_result = sync_inbound(db, token)
-        _log(f"  Upserted: {inbound_result['inbound_upserted']}")
-        _log(f"  Enriched: {inbound_result['inbound_enriched']}")
-        _log(f"  Created:  {inbound_result['inbound_created']}")
-        _log(f"  Skipped:  {inbound_result['inbound_skipped']}")
-
-        # 2. Outbound sync (if writeback enabled)
-        outbound_result = {"outbound_pushed": 0, "outbound_failed": 0, "outbound_skipped": 0, "outbound_stale": 0, "outbound_rate_limited": 0, "outbound_created": 0}
-        if writeback_enabled and last_sync:
-            _log("\n=== OUTBOUND SYNC: Weave → Google Contacts ===")
-            outbound_result = sync_outbound(db, token, last_sync)
-            _log(f"  Created: {outbound_result['outbound_created']}")
-            _log(f"  Pushed:  {outbound_result['outbound_pushed']}")
-            _log(f"  Failed:  {outbound_result['outbound_failed']}")
-            _log(f"  Skipped: {outbound_result['outbound_skipped']}")
-            _log(f"  Stale:   {outbound_result['outbound_stale']} (cleared)")
-            _log(f"  Rate-limited: {outbound_result['outbound_rate_limited']}")
-            if outbound_result.get('snapshot_file'):
-                _log(f"  Snapshot: {outbound_result['snapshot_file']}")
-        elif not writeback_enabled:
-            _log("\n=== OUTBOUND SYNC: SKIPPED (writeback disabled) ===")
-        else:
-            _log("\n=== OUTBOUND SYNC: SKIPPED (no previous sync timestamp) ===")
-
-        # Update config
-        now = datetime.now(timezone.utc).isoformat()
-        config['last_sync']['google_contacts'] = now
-        save_config(config)
-
-        # Log sync to sync_log.jsonl
+    _log("\n[Outbound] Weave → Google Contacts...")
+    writeback_enabled = config.get('writeback', {}).get('google_contacts', False)
+    if not writeback_enabled:
+        _log("Outbound SKIPPED: writeback.google_contacts is false in config (set true to enable outbound)")
+        result_out = {
+            'outbound_pushed': 0,
+            'outbound_failed': 0,
+            'outbound_skipped': 0,
+            'outbound_stale': 0,
+            'outbound_rate_limited': 0,
+            'outbound_created': 0
+        }
+    else:
         try:
-            import os
-            sync_log_path = HERMES_HOME / 'commons/data/ocas-weave/sync_log.jsonl'
-            os.makedirs(sync_log_path.parent, exist_ok=True)
-            log_entry = {
-                "timestamp": now,
-                "direction": "bidirectional",
-                "inbound_upserted": inbound_result['inbound_upserted'],
-                "outbound_pushed": outbound_result['outbound_pushed'],
-                "outbound_failed": outbound_result['outbound_failed'],
-                "snapshot_file": outbound_result.get('snapshot_file'),
-                "status": "completed"
-            }
-            with open(sync_log_path, 'a') as f:
-                f.write(json.dumps(log_entry) + '\n')
+            result_out = sync_outbound(db, token, last_sync_at)
+            _log(f"Outbound: pushed={result_out.get('outbound_pushed', '?')} failed={result_out.get('outbound_failed', '?')} skipped={result_out.get('outbound_skipped', '?')} stale={result_out.get('outbound_stale', '?')} rate_limited={result_out.get('outbound_rate_limited', '?')} created={result_out.get('outbound_created', '?')}")
         except Exception as e:
-            _log(f"  Warning: could not write sync log: {e}")
+            _log(f"ERROR outbound: {e}")
+            import traceback
+            _log(traceback.format_exc())
+            result_out = {
+                'outbound_pushed': 0,
+                'outbound_failed': 0,
+                'outbound_skipped': 0,
+                'outbound_stale': 0,
+                'outbound_rate_limited': 0,
+                'outbound_created': 0
+            }
 
-        _log(f"\n=== SYNC COMPLETE at {now} ===")
+    now = datetime.now(timezone.utc).isoformat()
+    if "last_sync" not in config:
+        config["last_sync"] = {}
+    config["last_sync"]["google_contacts"] = now
+    config["updated_at"] = now
+    save_config(config)
 
-        total_changes = (inbound_result['inbound_upserted'] +
-                        outbound_result['outbound_pushed'] +
-                        outbound_result['outbound_failed'])
-        if total_changes > 0:
-            _log(f"Total changes: {total_changes}")
-        else:
-            _log("No changes detected.")
+    conn = lb.Connection(db)
+    r = conn.execute("MATCH (p:Person) RETURN count(p)")
+    people_count = r.get_all()[0][0]
+    r2 = conn.execute("MATCH (p:Person) WHERE p.google_resource_name IS NOT NULL RETURN count(p)")
+    google_count = r2.get_all()[0][0]
+    _log(f"\nDatabase: {people_count} people ({google_count} with Google resource names)")
+    _log(f"Sync completed. Last sync: {now}")
+    _log("=" * 60)
 
-    finally:
-        db.close()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

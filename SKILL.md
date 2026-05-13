@@ -20,6 +20,12 @@ metadata:
       - name: "weave:update"
         schedule: "25 7 * * *"
         command: "weave.update"
+      - name: "weave:sync-contacts"
+        schedule: "0 8 * * 0"
+        command: "python3 {agent_root}/skills/ocas-weave/scripts/weave_full_sync.py"
+      - name: "weave:overnight-enrichment"
+        schedule: "0 2 * * *"
+        command: "python3 {agent_root}/skills/ocas-weave/scripts/overnight_enrichment.py"
   openclaw:
     skill_type: system
     visibility: public
@@ -50,6 +56,12 @@ metadata:
       - name: "weave:update"
         schedule: "25 7 * * *"
         command: "weave.update"
+      - name: "weave:sync-contacts"
+        schedule: "0 8 * * 0"
+        command: "python3 {agent_root}/skills/ocas-weave/scripts/weave_full_sync.py"
+      - name: "weave:overnight-enrichment"
+        schedule: "0 2 * * *"
+        command: "python3 {agent_root}/skills/ocas-weave/scripts/overnight_enrichment.py"
 ---
 
 # Weave

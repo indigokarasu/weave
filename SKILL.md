@@ -11,7 +11,7 @@ description: >
 metadata:
   author: Indigo Karasu
   email: mx.indigo.karasu@gmail.com
-  version: "3.3.2"
+  version: "3.5.0"
   hermes:
     tags: [social-graph, people, relationships]
     category: memory
@@ -368,8 +368,8 @@ When enriching a contact, follow this strict order:
 1. **Read** — Query Weave for the existing Person record. Confirm the record exists before any enrichment.
 2. **Search** — Use the searchx skill (SearXNG via `execute_code`) for web research. If SearchX is not available, fallback to the native `web_search` tool.
 3. **Enrich** — Add new Facts, Preferences, and relationship edges with full provenance (`source_type`, `source_ref`, `confidence`, `record_time`) on every write.
-   - **Scout Phase**: Use SearchX (SearXNG via `execute_code`) for identity-resolved research
-   - **Sift Phase**: Use Scrapling (v0.4.7+) with Playwright for JS-rendered pages, or platform APIs (GitHub API, Bluesky public API) for structured data. Do NOT use urllib static fetches.
+   - **Scout Phase**: Use SearchX (SearXNG via `execute_code`) for identity-resolved research. Build targeted queries using name + org. Returns URLs and snippets — these are NOT the extraction source, only the discovery mechanism.
+   - **Sift Phase**: Fetch **full page content** from the top non-auth-walled URLs discovered by Scout. Use direct HTTP fetch for static sites, Jina Reader (`r.jina.ai/<url>`) for JS-heavy sites. Extract structured data (occupation, org, location, email) from the full page content. **NEVER extract from search result snippets** — snippets are ~160 characters and produce truncated/garbage data (e.g., `"r Vice President"`, `"St"` instead of `"Stanford"`). Skip auth-walled domains (LinkedIn, Twitter/X, Facebook, Instagram) as they return login walls.
    - **Sherlock Phase**: Run `sherlock --print-found --no-color '<username>' --timeout 90` (required command). **Critical**: Sherlock finds USERNAMES, not verified profiles. You MUST verify 2+ data points for each result. Ignore username-only matches (different person with same handle).
 
    - **High-Quality Propagation Rule**: If a VERIFIED profile (2+ data points) SELF-IDENTIFIES another social platform:
@@ -430,7 +430,9 @@ Before any outbound sync:
 - Store useful, durable, socially actionable facts only.
 - **No outbound sync without explicit per-sync user approval.**
 - Do NOT use notes field for structured data — Person.notes column was dropped from schema. All provenance, verification details, and metadata must be stored as Fact nodes with typed predicates. There is no catch-all text field in Weave.
-- **Pitfall: Sync script `notes` property references**: The `google_sync.py` script may retain deprecated references to the dropped `Person.notes` property, causing `Cannot find property notes for p` errors. Common locations to patch:
+- **Pitfall: `HasFact` has no properties**: The `HasFact` relationship is defined without properties in the schema. Using `CREATE (p)-[:HasFact {fact_key: $key}]->(f)` fails with `Binder exception: Cannot find property fact_key`. The correct form is `CREATE (p)-[:HasFact]->(f)`. The `predicate` property on the Fact node itself identifies what the fact is about.
+- **Pitfall: Wrong enrichment pipeline**: When manually enriching contacts outside the overnight pipeline, do NOT shortcut with raw SearXNG regex extraction alone. The correct flow is Scout (identity-resolved OSINT research) → Sift (deep URL extraction via Scrapling/Jina) → Sherlock (username-to-platform expansion). The overnight script uses a simplified SearXNG-only approach for speed, but manual enrichment of high-value contacts should use the full pipeline for quality. See the Contact Enrichment Lifecycle section for the step-by-step procedure.
+- **Pitfall: Sync script `notes` property references**: The `google_sync.py` script may retain deprecated references to the dropped `Person.notes` property, causing `Cannot find property notes for p` errors.
   1. Inbound MERGE SET clauses: Remove `p.notes = CASE WHEN p.notes IS NULL OR p.notes = '' THEN $notes ELSE p.notes END` lines.
   2. Inbound CREATE statements: Remove `notes: $notes` from `CREATE (p:Person { ... })` property list.
   3. Outbound RETURN clauses: Remove `p.notes` from the `MATCH ... RETURN` list.
@@ -510,6 +512,7 @@ On first invocation of any Weave command, `_open_db()` handles auto-initializati
 |---|---|---|---|
 | `weave:update` | cron | `0 0 * * *` (midnight daily) | `weave.update` |
 | `weave:sync-google` | cron | `0 4 * * *` (4AM UTC) | `python3 {skill_root}/scripts/google_sync.py` |
+| `weave:enrichability-recalc` | cron | `0 1 * * *` (1am daily) | `python3 {skill_root}/scripts/recalculate_enrichability.py` |
 
 The `weave:sync-google` job runs `google_sync.py`, which performs the inbound pass (read all Google Contacts and gap-fill Weave) followed by the outbound pass (push Weave changes via BatchUpdateContacts) in a single invocation. Both passes share the 90 req/min Google People API ceiling, so they run sequentially with internal throttling rather than as separate jobs.
 
@@ -520,6 +523,21 @@ Manual invocation (`weave.sync.google-contacts`) runs `python3 {skill_root}/scri
 Script: `<hermes-root>/skills/ocas-weave/scripts/overnight_enrichment.py`
 Logs: `<hermes-root>/data/weave-enrichment/run.log`
 Progress: `<hermes-root>/data/weave-enrichment/progress.jsonl`
+Recalculation: `<hermes-root>/skills/ocas-weave/scripts/recalculate_enrichability.py` (run nightly at 1am ET via cron)
+
+**Architecture — 3-phase Scout → Sift → Write pipeline:**
+
+1. **Scout Phase** (`searxng_search` + `build_scout_queries`): Identity-resolved SearXNG search using name + org. Builds targeted queries like `"First Last" LinkedIn` and `"Name" Company`. Returns URLs and snippets.
+
+2. **Sift Phase** (`sift_extract_from_pages`): Fetches full page content from the top 3 non-auth-walled URLs using direct HTTP fetch (fast path) with Jina Reader fallback for JS-heavy sites. Extracts structured data (occupation, org, location, email) from the **full page content** — NOT from search snippets. This is the critical fix: the old code used regex on 160-character search snippets, which produced truncated/garbage data.
+
+3. **Write Phase** (`enrich_weave_contact`): Validates extracted fields, writes as Fact nodes with full provenance (source_url, source_type, confidence, record_time), recalculates enrichability_score.
+
+**Key fixes from the old pipeline:**
+- **No more snippet regex**: The old `extract_info_from_search()` applied regex to search result snippets (title + ~160 char content), producing truncated fields like `"r Vice President"` and `"St"` instead of `"Stanford"`. The new `sift_extract_from_pages()` fetches full pages.
+- **No `fact_key` on HasFact**: The old code used `CREATE (p)-[:HasFact {fact_key: $key}]->(f)` but `HasFact` has no properties in the schema. Fixed to `CREATE (p)-[:HasFact]->(f)`.
+- **Source URL tracking**: Each extracted field now stores its source URL in `source_ref` for provenance.
+- **Auth-walled domain skipping**: LinkedIn, Twitter/X, Facebook, Instagram are skipped during page fetch (they return login walls).
 
 **Re-processing pitfall**: The progress file tracks all contacted person IDs, but ~65% of searches return "no extractable data." If the filter excludes ALL progress-file IDs permanently, contacts that failed enrichment are never retried.
 
@@ -747,6 +765,7 @@ public
 | `references/token-troubleshooting.md` | When diagnosing invalid_grant or missing scopes for Google Contacts sync |
 | `references/google-token-quick-check.md` | Quick pre-flight token validation script to run before sync |
 | `references/google-token-diagnostics.md` | Full token diagnostic workflow: scope check, refresh token test, TOKEN_PATH verification |
+| `references/enrichability.md` | Enrichability score formula, interpretation, and query patterns |
 
 ## Update command
 
@@ -1226,6 +1245,45 @@ Two system Fact predicates track data quality and enrichment status (created Apr
 - `enriched` — properly researched via Scout methodology (44 contacts)
 - `enriched_corrupt` — old web_enrichment pipeline (broken data) (534 contacts)
 - `not_enriched` — untouched since Google import (453 contacts)
+
+### enrichability_score (0-10 scale)
+
+A system-computed Fact predicate that ranks how much a contact would benefit from an enrichment pass. Higher = more to gain. Stored as a Fact node (like `data_quality_score`) since LadybugDB does not support dynamic Person properties.
+
+**Score components (0-10 scale):**
+- **Remaining gaps** (0-4 pts): number of empty enrichable fields (org, occupation, location_city, email, phone) not yet covered by web_enrichment facts. More gaps = higher score.
+- **Seed quality** (0-3 pts): how much data exists to search with. Full name (given+family) = 1pt base, each additional filled field = 0.4pt. Better seed = more likely to find data.
+- **Connection value** (0-2 pts): log2(connections+1) * 0.6. More connected contacts are higher-value enrichment targets.
+- **Source reliability** (0-1 pts): imported=1.0, direct=0.9, scout_research=0.8, inferred=0.5, web_enrichment=0.4, user-stated=0.3. Imported contacts from Google are preferred.
+- **Enrichment penalty** (-0.5 per field): each gap already covered by web_enrichment facts reduces score (diminishing returns).
+- **Completeness penalty** (-0 to -1): data_quality_score / 10. Already-complete contacts score lower.
+
+**Score interpretation:**
+- **7-10**: Best candidates — good seed data, multiple gaps, imported source, not yet enriched
+- **4-6**: Moderate — some gaps remain, decent seed data
+- **1-3**: Low priority — few gaps or poor seed data
+- **0.5**: All gaps already covered by enrichment (may still have value for re-enrichment)
+- **0.0**: Complete (no gaps) or insufficient seed data (<2 fields)
+
+**Lifecycle:**
+- Populated initially by `scripts/recalculate_enrichability.py` (batch recalculation for all contacts)
+- Updated automatically after each successful `enrich_weave_contact()` call in `overnight_enrichment.py`
+- Should be recalculated periodically (e.g. nightly cron) to stay current as contacts are manually edited or synced
+
+**Query to find most enrichable contacts:**
+```cypher
+MATCH (p:Person)-[:HasFact]->(f:Fact {predicate: 'enrichability_score'})
+WHERE toFloat(f.value) >= 5.0
+RETURN p.name, f.value AS enrichability
+ORDER BY enrichability DESC
+LIMIT 20
+```
+Note: `toFloat()` is not available in LadybugDB. Sort by string value (works for same-length numbers) or sort in Python.
+
+**Recalculation script:**
+```bash
+python3 <hermes-root>/skills/ocas-weave/scripts/recalculate_enrichability.py
+```
 
 These Facts are internal to Weave and **do not sync** to Google Contacts (sync only exports Person-level fields).
 

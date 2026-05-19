@@ -68,7 +68,6 @@ metadata:
 
 Weave maintains a private, provenance-backed social graph of people, relationships, preferences, and shared experiences — queryable for meeting prep, gift ideas, hosting, introductions, city connections, and serendipity discovery. Every stored fact carries source type, reference, timestamp, and confidence score; the graph never silently merges two person records and never writes back to external systems without explicit per-sync approval. All queries use Cypher — no SQL. The database initializes automatically on first use.
 
-
 ## Responsibility boundary
 
 Weave owns the social relationship graph: people, relationships, preferences, and shared experiences. It is the only skill that writes to its LadybugDB database.
@@ -85,14 +84,12 @@ Weave does not: perform OSINT research (Scout), manage calendars (Sands), organi
 - Discover serendipity connections between people
 - Sync contacts from Google Contacts or Clay
 
-
 ## When not to use
 
 - Web research without a social graph need — use Sift
 - OSINT investigations on people — use Scout
 - CRM or sales pipeline automation
 - Personality profiling without evidence
-
 
 ## Integrated: google-contacts-weave-sync
 
@@ -189,7 +186,7 @@ Orchestrates a multi-phase pipeline to enrich the personal social graph (Weave) 
   - **Brave Search/SearchX**: Use as alternatives to Firecrawl.
 - **Disambiguation**: Cross-check academic publications against expected professional domain.
 - **LinkedIn Authwall**: Browser scraping returns login page; use search snippets.
-- **LadybugDB Constraints**: 
+- **LadybugDB Constraints**:
   - Use `CREATE` for relationship properties (not `MERGE` with inline props).
   - Create two directed edges for bidirectional relations.
   - Use `org` and `occupation` fields (not `company` or `job_title`).
@@ -267,7 +264,6 @@ Key mistake to avoid: Using `row['name']` on a list row from column selectors wi
     {run_id}.json     — one journal per run
 ```
 
-
 Default config.json:
 ```json
 {
@@ -290,13 +286,11 @@ Default config.json:
 }
 ```
 
-
 ## Database rules
 
 LadybugDB is an embedded single-file database. One `READ_WRITE` process at a time. If another process holds the lock, operations fail immediately with a lock error — do not retry silently, surface the error.
 
 Multiple `READ_ONLY` connections are safe simultaneously. `COPY FROM` is for bulk import (>100 rows). `MERGE` is for sporadic single-record upserts. Never loop `MERGE` over bulk data.
-
 
 ## Auto-initialization
 
@@ -305,7 +299,6 @@ Every command that opens the database runs `_ensure_init()` first. No manual ini
 Read `references/init_pattern.md` for the `_open_db` implementation pattern. Full DDL is in `references/schemas.md`.
 
 **Config.json missing**: Health checks should verify `config.json` exists in `{agent_root}/commons/db/ocas-weave/`. If missing, run `weave.init` to trigger auto-creation via `_ensure_init()`, as health checks do not invoke database commands and thus do not trigger auto-init.
-
 
 ## Commands
 
@@ -347,7 +340,6 @@ CALL show_warnings() RETURN *;
 
 **weave.update** -- Pull latest skill package from GitHub source. Preserves journals and data.
 
-
 ## Run completion
 
 After every Weave command that reads or writes data:
@@ -359,7 +351,6 @@ After every Weave command that reads or writes data:
 ## Provenance
 
 Every written fact requires: `source_type` (direct / inferred / imported / user-stated), `source_ref`, `record_time` (ISO 8601), `confidence` (0.0–1.0). Use `event_time` when the real-world occurrence has a distinct time. Never write facts without provenance.
-
 
 ## Contact Enrichment Lifecycle
 
@@ -448,7 +439,6 @@ Before any outbound sync:
 - Surface lock errors immediately.
 - Write a journal at the end of every run. Runs missing journals are invalid.
 
-
 ## OKRs
 
 Universal OKRs from spec-ocas-journal.md apply. Weave-specific:
@@ -477,7 +467,6 @@ skill_okrs:
     evaluation_window: 30_runs
 ```
 
-
 ## Optional skill cooperation
 
 - Elephas — read Chronicle read-only for entity enrichment (optional, degrades gracefully if absent)
@@ -485,7 +474,6 @@ skill_okrs:
 - Scout — receive OSINT findings about people as upsert candidates
 - Dispatch — provide social graph context for communication drafting
 - **Clay (Mesh MCP)** — CRM sync via Smithery (`clay-inc/clay-mcp`). The old Clay REST API (`api.clay.com/v1/`, `api.clay.earth/v1/`) is deprecated. Current integration uses Mesh MCP over HTTP via Smithery. Auth is OAuth (not API key). Install: `npx -y @smithery/cli@latest mcp add clay-inc/clay-mcp`.
-
 
 ## Journal outputs
 
@@ -499,7 +487,6 @@ When entities are encountered during a run, journals should include the followin
 - `preferences_observed` — list of preferences linked to entities encountered during the run.
 
 All entity observations must include a `user_relevance` field: `user` if the entity is directly related to the user's world, `agent_only` if encountered incidentally, `unknown` if unclear. Weave entities default to `user` since they represent the user's actual social connections.
-
 
 ## Initialization
 
@@ -562,7 +549,6 @@ Recalculation: `{skill_root}/scripts/recalculate_enrichability.py` (run nightly 
 6. Check recent sync activity: `tail -5 {agent_root}/commons/data/ocas-weave/sync_log.jsonl`
 7. Verify Google token scopes: Ensure `contacts` (or full URI `https://www.googleapis.com/auth/contacts`) is present in token scopes.
 
-
 ## Self-update
 
 `weave.update` pulls the latest package from the `source:` URL in this file's frontmatter. Runs silently — no output unless the version changed or an error occurred.
@@ -582,7 +568,6 @@ Recalculation: `{skill_root}/scripts/recalculate_enrichability.py` (run nightly 
    ```
 6. On failure → retry once. If second attempt fails, report the error and stop.
 7. Output exactly: `I updated Weave from version {old} to {new}`
-
 
 **Google Contacts sync**
 
@@ -711,7 +696,7 @@ Verify fix using byte-level checks (tool output like `grep`/`terminal` may trunc
 **Fix**:
 - If wrong file: Patch `TOKEN_PATH` to `{agent_root}/google_token.json`
 - If dead refresh token: Full re-auth required with `access_type=offline&prompt=consent`
-- If both files are problematic (e.g., `google_token.json` has scope but dead token, `owner_google_credentials.json` has alive token but no `contacts` scope): Full re-auth is required regardless. 
+- If both files are problematic (e.g., `google_token.json` has scope but dead token, `owner_google_credentials.json` has alive token but no `contacts` scope): Full re-auth is required regardless.
 
 **Cron job output when auth impossible**: Since no user is present to complete OAuth, the cron job MUST output a clear failure report (not `[SILENT]`). Format:
 ```
@@ -750,11 +735,9 @@ Verify fix using byte-level checks (tool output like `grep`/`terminal` may trunc
   Then re-run the sync script. The checkpoint system (`staging/outbound_ckpt.txt`) ensures the retry picks up where it left off — no duplicate pushes. **Why this works**: The refresh_token itself is valid; the issue is the script's internal refresh logic failing, not the credentials being revoked.
 - **Sync script corruption from write_file**: Using `execute_code`'s `write_file` tool to modify `google_sync.py` can introduce line number prefixes (e.g., `1|#!/usr/bin/env python3`) if the input `read_file` output includes line numbers (common with paginated read_file results). This causes `IndentationError` on script execution. A common corruption is the `TOKEN_PATH` line becoming `TOKEN_PATH=*** / 'google_token.json'` (invalid syntax). **Fix**: Always use direct Python file I/O or `sed` to modify the script, verify the first line is `#!/usr/bin/env python3` without leading whitespace, and check `grep TOKEN_PATH` for corruption. If corruption occurs, restore the script from the GitHub tarball using `gh api repos/indigokarasu/weave/tarball/main` to download the tarball and extract only the `scripts/` directory. For token diagnostic steps after fixing corruption, see `references/google-token-diagnostics.md`.
 
-
 ## Visibility
 
 public
-
 
 ## Support file map
 
@@ -783,9 +766,7 @@ weave.update
 
 This pulls the latest version from GitHub and restarts the skill's background tasks if applicable.
 
-
 ## Integrated: weave-db-maintenance
-
 
 # Weave Database Maintenance Skill
 

@@ -69,6 +69,12 @@ metadata:
 Weave maintains a private, provenance-backed social graph of people, relationships, preferences, and shared experiences — queryable for meeting prep, gift ideas, hosting, introductions, city connections, and serendipity discovery. Every stored fact carries source type, reference, timestamp, and confidence score; the graph never silently merges two person records and never writes back to external systems without explicit per-sync approval. All queries use Cypher — no SQL. The database initializes automatically on first use.
 
 
+## Responsibility boundary
+
+Weave owns the social relationship graph: people, relationships, preferences, and shared experiences. It is the only skill that writes to its LadybugDB database.
+
+Weave does not: perform OSINT research (Scout), manage calendars (Sands), organize files (Bower), or build the long-term knowledge graph (Elephas). Entity disambiguation queries to Weave are read-only for all other skills.
+
 ## When to use
 
 - Store or update information about a person, relationship, or preference
@@ -111,14 +117,14 @@ Bidirectional sync between Google Contacts and Weave's LadybugDB social graph. I
 | Write-back (outbound) | `contacts` | Requires full scope |
 
 ### Token and OAuth
-Google OAuth credentials at `<hermes-root>/owner_google_credentials.json`. Client ID is `<GOOGLE_OAUTH_CLIENT_ID>.apps.googleusercontent.com`.
+Google OAuth credentials at `{agent_root}/owner_google_credentials.json`. Client ID is `<GOOGLE_OAUTH_CLIENT_ID>.apps.googleusercontent.com`.
 
 ### Inbound Sync Procedure
 1. **Check/Initialize Weave Schema**: Verify database has tables. Refer to `references/schemas.md` for full DDL.
 2. **Fetch Google Contacts**: Use REST API via `urllib.request` (preferred) or `googleapiclient` SDK.
 3. **Load Existing Weave State**: Load Person nodes by email and phone for cross-referencing.
 4. **Cross-Reference and Sync**: Match by `google_resource_name`, then email, then phone. Apply enrichment logic (only fill NULL/empty fields).
-5. **Track Changes**: Write to `<hermes-root>/data/hermes-weave/sync_history.jsonl`.
+5. **Track Changes**: Write to `{agent_root}/data/hermes-weave/sync_history.jsonl`.
 6. **Update Config**: Update `last_sync` in `config.json`.
 
 [{'resourceName}': 'updateContact` (NOT `{resourceName'}, [0]]
@@ -187,10 +193,10 @@ Orchestrates a multi-phase pipeline to enrich the personal social graph (Weave) 
   - Use `CREATE` for relationship properties (not `MERGE` with inline props).
   - Create two directed edges for bidirectional relations.
   - Use `org` and `occupation` fields (not `company` or `job_title`).
-- **Google Drive/Docs**: Use OAuth tokens (`~/.hermes/indigo_google_credentials.json`) instead of service accounts to avoid 403 quota/permission errors.
+- **Google Drive/Docs**: Use OAuth tokens (`{agent_root}/indigo_google_credentials.json`) instead of service accounts to avoid 403 quota/permission errors.
 
 ### Report Output
-Final report link saved to `<hermes-root>/commons/data/ocas-expansion/last_run_report.txt`.
+Final report link saved to `{agent_root}/commons/data/ocas-expansion/last_run_report.txt`.
 
 Weave owns the private social graph: people, relationships, preferences, and shared experiences.
 
@@ -520,10 +526,10 @@ Manual invocation (`weave.sync.google-contacts`) runs `python3 {skill_root}/scri
 
 ### Overnight Enrichment Pipeline
 
-Script: `<hermes-root>/skills/ocas-weave/scripts/overnight_enrichment.py`
-Logs: `<hermes-root>/data/weave-enrichment/run.log`
-Progress: `<hermes-root>/data/weave-enrichment/progress.jsonl`
-Recalculation: `<hermes-root>/skills/ocas-weave/scripts/recalculate_enrichability.py` (run nightly at 1am ET via cron)
+Script: `{skill_root}/scripts/overnight_enrichment.py`
+Logs: `{agent_root}/data/weave-enrichment/run.log`
+Progress: `{agent_root}/data/weave-enrichment/progress.jsonl`
+Recalculation: `{skill_root}/scripts/recalculate_enrichability.py` (run nightly at 1am ET via cron)
 
 **Architecture — 3-phase Scout → Sift → Write pipeline:**
 
@@ -549,11 +555,11 @@ Recalculation: `<hermes-root>/skills/ocas-weave/scripts/recalculate_enrichabilit
 
 **Enrichment Pipeline Health Check**: Run these checks periodically (e.g., via cron) to verify pipeline health:
 1. Check if enrichment process is running: `ps aux | grep overnight_weave_enrichment | grep -v grep`
-2. If not running and before 6am PDT, restart: `python3 <hermes-root>/scripts/overnight_weave_enrichment.py`
+2. If not running and before 6am PDT, restart: `python3 {agent_root}/scripts/overnight_weave_enrichment.py`
 3. Check progress.jsonl duplicates: Count unique `id` values vs total entries; truncate if duplicate rate >10%
-4. Check enrichment stats: `cat <hermes-root>/data/weave-enrichment/stats.json`
-5. Check last sync time: `cat <hermes-root>/commons/db/ocas-weave/config.json | grep last_sync`
-6. Check recent sync activity: `tail -5 <hermes-root>/commons/data/ocas-weave/sync_log.jsonl`
+4. Check enrichment stats: `cat {agent_root}/data/weave-enrichment/stats.json`
+5. Check last sync time: `cat {agent_root}/commons/db/ocas-weave/config.json | grep last_sync`
+6. Check recent sync activity: `tail -5 {agent_root}/commons/data/ocas-weave/sync_log.jsonl`
 7. Verify Google token scopes: Ensure `contacts` (or full URI `https://www.googleapis.com/auth/contacts`) is present in token scopes.
 
 
@@ -623,22 +629,22 @@ Run the token health check in `references/google-token-quick-check.md` to catch 
 - **Correct update endpoint**: Use `{resourceName}:updateContact` (not `{resourceName}`) for PATCH updates.
 - **Social profiles from notes**: Extract `notes.social_profiles` JSON and push each `{platform, url}` as `urls` entries with `type` set to the platform name.
 - **Phone numbers may arrive with malformed leading `1`** (e.g. `+1 (141)...`) — validate before storing
-- **Token path**: use `<hermes-root>/owner_google_credentials.json` for owner's contacts (owner is the Google Contacts account owner, not Indigo)
+- **Token path**: use `{agent_root}/owner_google_credentials.json` for owner's contacts (owner is the Google Contacts account owner, not Indigo)
 - **execute_code timeout**: The full `weave_google_bidirectional_sync.py` script times out in `execute_code` (300s limit) when outbound has 200+ contacts (2 API calls × 1.3s sleep each). Manual sync workaround: run as background process via `terminal(background=true)` with `notify_on_complete=true`. The script handles its own checkpointing. Cron jobs don't have this issue since they run outside `execute_code`.
 - **Manual sync via background process**: When invoking `weave_google_bidirectional_sync.py` manually, always use `terminal(background=true, notify_on_complete=true, timeout=600)` — do NOT use `execute_code` (300s cap) or foreground `terminal` (blocks agent). The script takes ~280s for ~900 contacts (inbound ~90s, outbound ~190s). If the process needs to be monitored, check the checkpoint file size: `wc -l staging/outbound_ckpt.txt` — each line is a pushed `google_resource_name`. **If the process is killed (exit 143 SIGTERM or 137 SIGKILL)**, this is usually memory pressure from the real_ladybug C extension (~500-800MB RSS with 900+ contacts). The checkpoint system survives kills — just clear the LadybugDB lock (see "LadybugDB lock not released after process kill" below), re-run, and it resumes automatically.
 - **Multi-run resilience**: The script's checkpoint system (`staging/outbound_ckpt.txt`) survives process kills and restarts. If interrupted mid-outbound, re-running the script resumes from the last pushed contact. Example: 571 contacts pushed across 3 runs (150 + 50 + 471) without data loss or duplication. On successful completion, the checkpoint file is deleted automatically.
 - **Process spawning**: The Python script spawns a child process (real_ladybug C extension). You'll see two PIDs: parent (bash shell, `do_wait`) and child (python3, doing actual work). This is normal — do not kill the child thinking it's a duplicate.
 - **Output buffering**: When run as background process, stdout appears empty for 90-120+ seconds despite the script actively working. The `import real_ladybug` (21MB C extension) and initial database query take significant time before the first `_log()` output appears. Monitor progress via `ps aux | grep weave_google`, `/proc/<pid>/wchan`, or `ss -tnp | grep <pid>` (for active API calls). Do NOT kill the process thinking it's hung — check checkpoint file or process CPU usage first.
 - **Do NOT use SIGUSR1**: Sending `kill -USR1` to the Python process causes it to crash with `RuntimeError` (no traceback handler installed). Use `/proc/<pid>/wchan`, `ss -tnp`, and checkpoint file inspection for diagnostics instead.
-- **LadybugDB lock not released after process kill**: When the sync process is killed (SIGTERM/SIGKILL, exit codes 143/137), the LadybugDB file lock on `weave.lbug` can remain held by orphaned child processes. The next run fails with `RuntimeError: IO exception: Could not set lock on file`. **Diagnosis**: `fuser -v <hermes-root>/commons/db/ocas-weave/weave.lbug` shows which PID holds the lock. **Fix**:
+- **LadybugDB lock not released after process kill**: When the sync process is killed (SIGTERM/SIGKILL, exit codes 143/137), the LadybugDB file lock on `weave.lbug` can remain held by orphaned child processes. The next run fails with `RuntimeError: IO exception: Could not set lock on file`. **Diagnosis**: `fuser -v {agent_root}/commons/db/ocas-weave/weave.lbug` shows which PID holds the lock. **Fix**:
   ```bash
-  fuser -v <hermes-root>/commons/db/ocas-weave/weave.lbug 2>&1
+  fuser -v {agent_root}/commons/db/ocas-weave/weave.lbug 2>&1
   # Kill the orphaned process
   kill -9 <PID> 2>/dev/null
   # Clean up stale .wal file
-  rm -f <hermes-root>/commons/db/ocas-weave/weave.lbug.wal
+  rm -f {agent_root}/commons/db/ocas-weave/weave.lbug.wal
   # Verify lock is released
-  fuser <hermes-root>/commons/db/ocas-weave/weave.lbug
+  fuser {agent_root}/commons/db/ocas-weave/weave.lbug
   # Then retry the sync
   ```
   **Warning**: Multiple processes may need killing — `fuser` only shows one at a time. Kill, re-check, repeat until `fuser` returns empty. The `.wal` file from a killed process is always stale; removing it is safe. The script will re-create it on next run.
@@ -648,7 +654,7 @@ Run the token health check in `references/google-token-quick-check.md` to catch 
 - **Refresh token expired/revoked (invalid_grant)**: The refresh token itself can become invalid (HTTP 400 `{"error": "invalid_grant", "error_description": "Token has been expired or revoked."}`). This is **different** from the silent refresh failure below — the refresh token is permanently dead and cannot be refreshed. **Causes**: User revoked app access, Google invalidated the token, or token was generated without `access_type=offline`. **Fix**: Full re-auth required — generate a new authorization URL with `access_type=offline&prompt=consent` and all required scopes, exchange the auth code for a new token with a fresh refresh_token. Use this diagnostic:
   ```python
   import json, urllib.request, urllib.parse
-  with open('<hermes-root>/google_token.json') as f:
+  with open('{agent_root}/google_token.json') as f:
       td = json.load(f)
   req = urllib.request.Request(
       'https://oauth2.googleapis.com/token',
@@ -667,43 +673,43 @@ Run the token health check in `references/google-token-quick-check.md` to catch 
       body = e.read().decode()
       print(f'HTTP {e.code}: {body}')  # Look for invalid_grant
   ```
-- **Pre-sync scope verification**: Before attempting any People API call, verify the token's scopes include contacts. The credentials at `<hermes-root>/owner_google_credentials.json` may have been generated for Gmail/Calendar/Drive only (missing `contacts`, `contacts.readonly`, `contacts.other.readonly`). Check with: `python3 -c "import json; td=json.load(open('<hermes-root>/google_token.json')); print(td.get('scopes', []))"`. If contacts scopes are missing, the token must be re-authorized with the correct scopes — the old token cannot be patched. For a complete diagnostic workflow including refresh token validity testing and re-auth steps, see `references/google-token-diagnostics.md`.
+- **Pre-sync scope verification**: Before attempting any People API call, verify the token's scopes include contacts. The credentials at `{agent_root}/owner_google_credentials.json` may have been generated for Gmail/Calendar/Drive only (missing `contacts`, `contacts.readonly`, `contacts.other.readonly`). Check with: `python3 -c "import json; td=json.load(open('{agent_root}/google_token.json')); print(td.get('scopes', []))"`. If contacts scopes are missing, the token must be re-authorized with the correct scopes — the old token cannot be patched. For a complete diagnostic workflow including refresh token validity testing and re-auth steps, see `references/google-token-diagnostics.md`.
   - Note: The full URI scope `https://www.googleapis.com/auth/contacts` is equivalent to the short `contacts` scope. When checking scopes, accept either form.
-**Script file corruption (TOKEN_PATH =*** or /root/...json)**: The sync script at `<hermes-root>/skills/ocas-weave/scripts/google_sync.py` may have a corrupted line like `TOKEN_PATH=*** / 'google_token.json'` (invalid Python, literal asterisks in source) or `TOKEN_PATH='/root/...json'` (truncated path from read_file output being persisted). These are caused by: 1) sed/find-and-replace targeting `Path.home()` or the actual path and replacing it with `***`, or 2) read_file truncation (displaying `/root/...json` instead of the full path) being written back to the script. **Fix**: Patch to `TOKEN_PATH = '<hermes-root>/google_token.json'`. Always verify the script parses correctly before running: `python3 -c "import ast; ast.parse(open('<hermes-root>/skills/ocas-weave/scripts/google_sync.py').read()); print('OK')"`. **Same corruption can affect `weave_contact_snapshots.py`** — always check both scripts when TOKEN_PATH corruption is suspected.
+**Script file corruption (TOKEN_PATH =*** or /root/...json)**: The sync script at `{skill_root}/scripts/google_sync.py` may have a corrupted line like `TOKEN_PATH=*** / 'google_token.json'` (invalid Python, literal asterisks in source) or `TOKEN_PATH='/root/...json'` (truncated path from read_file output being persisted). These are caused by: 1) sed/find-and-replace targeting `Path.home()` or the actual path and replacing it with `***`, or 2) read_file truncation (displaying `/root/...json` instead of the full path) being written back to the script. **Fix**: Patch to `TOKEN_PATH = '{agent_root}/google_token.json'`. Always verify the script parses correctly before running: `python3 -c "import ast; ast.parse(open('{skill_root}/scripts/google_sync.py').read()); print('OK')"`. **Same corruption can affect `weave_contact_snapshots.py`** — always check both scripts when TOKEN_PATH corruption is suspected.
 
-**Pitfall: Tool output truncation false positive**: `read_file`, `terminal`, and `execute_code` tools may truncate long paths in their output (e.g., `<hermes-root>/google_token.json` → `/root/...json`). This is a **display artifact only** — the actual file content is usually correct. Verify with raw file reads (e.g., `cat -n <file>`, Python `open()` with `repr()` per line, or hex byte checks) before attempting fixes. **Never use truncated tool output to write files**, as this can persist corruption (e.g., writing `/root/...json` as TOKEN_PATH). In Apr 2026, 10+ minutes were wasted "fixing" a TOKEN_PATH that was already correct; in May 2026, another 15+ minutes were lost to the same issue across multiple tools.
+**Pitfall: Tool output truncation false positive**: `read_file`, `terminal`, and `execute_code` tools may truncate long paths in their output (e.g., `{agent_root}/google_token.json` → `/root/...json`). This is a **display artifact only** — the actual file content is usually correct. Verify with raw file reads (e.g., `cat -n <file>`, Python `open()` with `repr()` per line, or hex byte checks) before attempting fixes. **Never use truncated tool output to write files**, as this can persist corruption (e.g., writing `/root/...json` as TOKEN_PATH). In Apr 2026, 10+ minutes were wasted "fixing" a TOKEN_PATH that was already correct; in May 2026, another 15+ minutes were lost to the same issue across multiple tools.
 
 **Pitfall: Reliable TOKEN_PATH fix when corrupted**: When TOKEN_PATH is truly corrupted (e.g., `***`, `/root/...json` truncated path, or invalid syntax), `patch` tool and `sed` may fail due to special characters or escaping issues. Use Python with regex to replace any TOKEN_PATH assignment regardless of current corruption pattern:
 ```python
 import re
-with open('<hermes-root>/skills/ocas-weave/scripts/google_sync.py', 'rb') as f:
+with open('{skill_root}/scripts/google_sync.py', 'rb') as f:
     content = f.read()
 # Replace any TOKEN_PATH="<any value>" with the correct full path
 new_content = re.sub(
     rb'TOKEN_PATH\s*=\s*"[^"]*"',
-    rb'TOKEN_PATH="<hermes-root>/google_token.json"',
+    rb'TOKEN_PATH="{agent_root}/google_token.json"',
     content
 )
-with open('<hermes-root>/skills/ocas-weave/scripts/google_sync.py', 'wb') as f:
+with open('{skill_root}/scripts/google_sync.py', 'wb') as f:
     f.write(new_content)
 ```
 Verify fix using byte-level checks (tool output like `grep`/`terminal` may truncate long paths):
-- Hexdump check: `hexdump -C <hermes-root>/skills/ocas-weave/scripts/google_sync.py | grep -A1 TOKEN_PATH`
+- Hexdump check: `hexdump -C {skill_root}/scripts/google_sync.py | grep -A1 TOKEN_PATH`
 - Python byte check: `python3 -c "with open('script.py', 'rb') as f: c=f.read(); idx=c.find(b'TOKEN_PATH'); print(c[idx:idx+60])"`
-- **Wrong token file or dead refresh token (Apr 2026)**: The script at `<hermes-root>/skills/ocas-weave/scripts/google_sync.py` may point to the wrong token file, OR the token file may have a dead refresh token. Two distinct failure modes:
+- **Wrong token file or dead refresh token (Apr 2026)**: The script at `{skill_root}/scripts/google_sync.py` may point to the wrong token file, OR the token file may have a dead refresh token. Two distinct failure modes:
 1. **Wrong file path**: Script points to `owner_google_credentials.json` (lacks `contacts` scope) instead of `google_token.json` (has correct scopes).
 2. **Dead refresh token**: `google_token.json` has correct scopes including `contacts`, but the refresh token itself is expired/revoked (HTTP 400 `invalid_grant` — permanently dead, requires full re-auth).
 
 **Symptom**: Script fails with "Token refresh failed: HTTP Error 400: Bad Request" then 401 Unauthorized on the People API call.
 
 **Diagnosis**:
-1. Check which file the script reads: `grep TOKEN_PATH <hermes-root>/skills/ocas-weave/scripts/google_sync.py`
-2. Verify the token file's scopes: `python3 -c "import json; td=json.load(open('<hermes-root>/google_token.json')); print(td.get('scopes', []))"`
+1. Check which file the script reads: `grep TOKEN_PATH {skill_root}/scripts/google_sync.py`
+2. Verify the token file's scopes: `python3 -c "import json; td=json.load(open('{agent_root}/google_token.json')); print(td.get('scopes', []))"`
 3. Test refresh token validity (see `references/google-token-diagnostics.md`)
-4. Check alternate token file: `python3 -c "import json; td=json.load(open('<hermes-root>/owner_google_credentials.json')); print(td.get('scopes', []), 'has_refresh:', 'refresh_token' in td)"`
+4. Check alternate token file: `python3 -c "import json; td=json.load(open('{agent_root}/owner_google_credentials.json')); print(td.get('scopes', []), 'has_refresh:', 'refresh_token' in td)"`
 
 **Fix**:
-- If wrong file: Patch `TOKEN_PATH` to `<hermes-root>/google_token.json`
+- If wrong file: Patch `TOKEN_PATH` to `{agent_root}/google_token.json`
 - If dead refresh token: Full re-auth required with `access_type=offline&prompt=consent`
 - If both files are problematic (e.g., `google_token.json` has scope but dead token, `owner_google_credentials.json` has alive token but no `contacts` scope): Full re-auth is required regardless. 
 
@@ -723,7 +729,7 @@ Verify fix using byte-level checks (tool output like `grep`/`terminal` may trunc
   python3 -c "
   import json, urllib.request, urllib.parse
   from datetime import datetime, timezone, timedelta
-  with open('<hermes-root>/google_token.json') as f:
+  with open('{agent_root}/google_token.json') as f:
       td = json.load(f)
   resp = urllib.request.urlopen(urllib.request.Request(
       'https://oauth2.googleapis.com/token',
@@ -736,7 +742,7 @@ Verify fix using byte-level checks (tool output like `grep`/`terminal` may trunc
   new = json.loads(resp.read())
   td['token'] = new['access_token']
   td['expiry'] = (datetime.now(timezone.utc) + timedelta(seconds=new['expires_in'])).isoformat()
-  with open('<hermes-root>/owner_google_credentials.json', 'w') as f:
+  with open('{agent_root}/owner_google_credentials.json', 'w') as f:
       json.dump(td, f, indent=2)
   print('Token refreshed, expires:', td['expiry'])
   "
@@ -838,7 +844,7 @@ def safe_get_all(conn, query):
 - `fuser -v /path/to/weave.lbug` shows which PID holds the lock
 - After a killed process (SIGTERM/SIGKILL), orphan processes may hold the lock
 - **Kill orphan**: `kill -9 <PID>` — repeat until `fuser` returns empty
-- **Stale WAL**: `rm -f <hermes-root>/commons/db/ocas-weave/weave.lbug.wal` after killed processes
+- **Stale WAL**: `rm -f {agent_root}/commons/db/ocas-weave/weave.lbug.wal` after killed processes
 - The `.wal` file from a killed process is always stale; removing it is safe
 
 ## Person Properties (for reference in queries)
@@ -860,7 +866,7 @@ No `city`, `location_region`, or `company` properties — use exact names above.
 from real_ladybug import Database, Connection
 import json
 
-db = Database("<hermes-root>/commons/db/ocas-weave/weave.lbug", read_only=True)
+db = Database("{agent_root}/commons/db/ocas-weave/weave.lbug", read_only=True)
 conn = Connection(db)
 
 def safe_get_all(conn, query):
@@ -1130,8 +1136,8 @@ print(f"Orphan facts: {rows[0][0] if rows else 0}")
 
 ### 7. Snapshot Before Cleanup (optional)
 ```bash
-cp <hermes-root>/commons/db/ocas-weave/weave.lbug \
-   <hermes-root>/commons/db/ocas-weave/snapshots/weave-$(date +%Y%m%d-%H%M%S).lbug
+cp {agent_root}/commons/db/ocas-weave/weave.lbug \
+   {agent_root}/commons/db/ocas-weave/snapshots/weave-$(date +%Y%m%d-%H%M%S).lbug
 ```
 
 ## Key Considerations
@@ -1282,7 +1288,7 @@ Note: `toFloat()` is not available in LadybugDB. Sort by string value (works for
 
 **Recalculation script:**
 ```bash
-python3 <hermes-root>/skills/ocas-weave/scripts/recalculate_enrichability.py
+python3 {skill_root}/scripts/recalculate_enrichability.py
 ```
 
 These Facts are internal to Weave and **do not sync** to Google Contacts (sync only exports Person-level fields).
@@ -1298,6 +1304,6 @@ These Facts are internal to Weave and **do not sync** to Google Contacts (sync o
 
 ## References
 - LadybugDB documentation for Cypher syntax
-- Weave sync scripts in `<hermes-root>/scripts/`
-- Weave database at `<hermes-root>/commons/db/ocas-weave/weave.lbug`
+- Weave sync scripts in `{agent_root}/scripts/`
+- Weave database at `{agent_root}/commons/db/ocas-weave/weave.lbug`
 - Schema reference: `skill_view('ocas-weave', 'references/schemas.md')`

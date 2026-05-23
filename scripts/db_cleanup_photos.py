@@ -11,7 +11,11 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-with open(AGENT_ROOT / 'owner_google_credentials.json') as f:
+# Use MCP credentials directory
+CREDS_DIR = Path('/root/.google_workspace_mcp/credentials')
+TOKEN_PATH = CREDS_DIR / 'google-workspace-user.json'
+
+with open(TOKEN_PATH) as f:
     token_data = json.load(f)
 
 creds = Credentials(

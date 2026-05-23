@@ -258,10 +258,9 @@ def sync_outbound_google(db, creds, last_sync_at):
 - Clear invalid fields rather than pushing bad data to Google
 
 **Token path:**
-- The script at `<hermes-root>/skills/ocas-weave/scripts/google_sync.py` reads `TOKEN_PATH` — verify which file it's using: `grep TOKEN_PATH <hermes-root>/skills/ocas-weave/scripts/google_sync.py`
-- **Correct file**: `<hermes-root>/owner_google_credentials.json` — this is owner's Google Contacts account with full `contacts` scope and a valid refresh token
-- **Stale file**: `<hermes-root>/owner_google_credentials.json` (DO NOT use — see above) — DO NOT use. This file has an expired/revoked refresh token (`invalid_grant`) and NO contacts scope. It was used historically but the credentials are permanently dead
-- Indigo's token is at `<hermes-root>/indigo_google_credentials.json` — separate Google account, not used for contacts sync
+- The sync scripts read from `/root/.google_workspace_mcp/credentials/google-workspace-user.json` (managed by Google Workspace MCP server)
+- This file is kept up-to-date by the MCP server's OAuth flow
+- If the refresh token dies, re-auth through the MCP (see ocas-custodian/google-workspace-auth-troubleshooting.md)
 
 ## Contact Snapshot Safeguard (required before outbound sync)
 
@@ -297,9 +296,9 @@ If bad data is pushed to Google:
 
 ### Snapshot Script Pitfalls
 
-**Token path must match the main sync script**: `weave_contact_snapshots.py` has its own `TOKEN_PATH` that can drift from the bidirectional script. Both must point to the same credentials file (`owner_google_credentials.json` for owner's contacts account). Common bugs:
+**Token path must match the main sync script**: `weave_contact_snapshots.py` has its own `TOKEN_PATH` that can drift from the bidirectional script. Both must point to the same credentials file (`google-workspace-user.json` for owner's contacts account). Common bugs:
 - `TOKEN_PATH=***` corruption — same sed/find-and-replace corruption as the main sync script
-- Pointing to `indigo_google_credentials.json` (Indigo's account) instead of `owner_google_credentials.json` — Indigo's token may not have `contacts` scope
+- Pointing to `mx.indigo.karasu@gmail.com.json` (Indigo's account) instead of `google-workspace-user.json` — Indigo's token may not have `contacts` scope
 - Double `Path` import (`from pathlib import Path as _P` when `Path` is already imported at the top)
 
 **Symptom**: Snapshot creates an empty file (0 bytes) with "588 errors" on CLI output but the main sync proceeds and succeeds. Always verify snapshot file has content after a run: `wc -l <snapshot_file>`.
@@ -307,7 +306,7 @@ If bad data is pushed to Google:
 **Fix**: Verify and patch:
 ```bash
 grep TOKEN_PATH <hermes-root>/skills/ocas-weave/scripts/contact_snapshots.py
-# Should be: TOKEN_PATH = HERMES_HOME / 'owner_google_credentials.json'
+# Should be: TOKEN_PATH = HERMES_HOME / 'google-workspace-user.json'
 python3 -c "import ast; ast.parse(open('<hermes-root>/skills/ocas-weave/scripts/contact_snapshots.py').read()); print('OK')"
 ```
 

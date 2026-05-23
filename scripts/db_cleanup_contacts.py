@@ -16,6 +16,10 @@ from urllib.parse import urlparse
 
 AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
 
+# Use MCP credentials directory
+CREDS_DIR = Path('/root/.google_workspace_mcp/credentials')
+TOKEN_PATH = CREDS_DIR / 'google-workspace-user.json'
+
 # Add the Google Workspace skill scripts to path
 sys.path.insert(0, str(AGENT_ROOT / 'skills/productivity/google-workspace/scripts'))
 
@@ -31,9 +35,8 @@ class GoogleContactsCleanup:
         self.backup_dir = Path(backup_dir) if backup_dir else AGENT_ROOT / "backups/google_contacts"
         self.backup_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load credentials
-        token_path = str(AGENT_ROOT / 'owner_google_credentials.json')
-        with open(token_path) as f:
+        # Load credentials from MCP directory
+        with open(TOKEN_PATH) as f:
             token_data = json.load(f)
         
         self.creds = Credentials(

@@ -23,8 +23,8 @@ from pathlib import Path
 AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
 DB_PATH = AGENT_ROOT / 'commons/db/ocas-weave/weave.lbug'
 CONFIG_PATH = AGENT_ROOT / 'commons/data/ocas-weave/config.json'
-# owner's Google account for contacts sync
-TOKEN_PATH = AGENT_ROOT / 'owner_google_credentials.json'
+# Google Workspace MCP credentials directory
+TOKEN_PATH = Path('/root/.google_workspace_mcp/credentials/google-workspace-user.json')
 PEOPLE_API_BASE = 'https://people.googleapis.com/v1'
 
 def _log(msg):

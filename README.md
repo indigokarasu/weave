@@ -1,77 +1,77 @@
 # 🕸️ Weave
 
-Weave maintains a private, provenance-backed social graph of people, relationships, preferences, and shared experiences -- queryable for meeting prep, gift ideas, hosting, introductions, city connections, and serendipity discovery. Every stored fact carries source type, reference, timestamp, and confidence score; the graph never silently merges two person records and never writes back to external systems without explicit per-sync approval.
+> **Private provenance-backed social graph — contacts, relationships, preferences, and shared experiences.**
 
+## Why Weave?
 
-Skill packages follow the [agentskills.io](https://agentskills.io/specification) open standard and are compatible with OpenClaw, Hermes Agent, and any agentskills.io-compliant client.
+You know a lot about the people in your life — their preferences, how you met, what you've shared — but that knowledge is scattered across emails, conversations, and your memory. Weave brings it all together in a private, queryable social graph. Every fact carries provenance: who told you, when, and how confident you should be.
 
----
+Skill packages follow the [agentskills.io](https://agentskills.io/specification) open standard and are compatible with OpenClaw, Hermes Agent, Claude, and any agentskills.io-compliant client.
 
-## Overview
+## Quick Start
 
-Weave maintains a private social graph where every stored fact carries provenance -- source type, reference, timestamp, and confidence score. It is designed for the kind of knowledge that matters in relationships: who someone is, how they connect to others, what they like, what experiences you have shared. Queries support meeting prep, gift ideas, hosting context, city connections, and serendipity discovery across the graph. The database never silently merges two person records, never writes back to external systems without explicit per-sync approval, and uses only Cypher for all graph operations. The underlying database (LadybugDB) initializes automatically at `{agent_root}/commons/db/ocas-weave/weave.lbug`.
+```
+# Add a person
+"I met Alex Chen at the conference last week, he's into robotics"
+
+# Query the graph
+"Who do I know in the robotics space?"
+
+# Meeting prep
+"What should I know about Sarah before our meeting?"
+
+# Gift ideas
+"What would be a good gift for Alex?"
+```
+
+Weave auto-initializes on first use. The graph never silently merges two person records and never writes back to external systems without explicit approval.
+
+## What It Does
+
+Weave maintains a private social graph where every stored fact carries provenance — source type, reference, timestamp, and confidence score. It supports meeting prep, gift ideas, hosting context, city connections, and serendipity discovery. The underlying database (LadybugDB) initializes automatically.
 
 ## Commands
 
 | Command | Description |
 |---|---|
 | `weave.upsert.person` | Add or update a person record |
-| `weave.upsert.relationship` | Add or update a Knows edge between two people |
-| `weave.upsert.preference` | Store a provenance-backed preference for a person |
-| `weave.import.csv` | Bulk import contacts via COPY FROM |
-| `weave.query` | Query the graph (lookup, connection, serendipity, city, summarize, gift modes) |
+| `weave.upsert.relationship` | Add or update a Knows edge |
+| `weave.upsert.preference` | Store a preference for a person |
+| `weave.import.csv` | Bulk import contacts |
+| `weave.query` | Query the graph (lookup, connection, serendipity, city, gift) |
 | `weave.attach` | Query an external skill database read-only |
-| `weave.export` | Export data to staging directory via COPY TO |
+| `weave.export` | Export data to staging directory |
 | `weave.sync.google-contacts` | Bidirectional sync with Google Contacts |
-| `weave.sync.clay` | Bidirectional sync with Clay |
-| `weave.project.vcard` | Generate vCard 4.0 draft |
-| `weave.writeback.contacts` | Push records to Google Contacts or Clay (disabled by default) |
-| `weave.init` | Diagnostic and repair: checks schema, creates missing tables |
+| `weave.writeback.contacts` | Push records to Google Contacts or Clay |
+| `weave.init` | Diagnostic and repair |
 | `weave.status` | Graph health and config state |
-| `weave.journal` | Write journal for the current run |
-| `weave.update` | Pull latest from GitHub source (preserves journals and data) |
-
-## Setup
-
-`weave.init` runs automatically on first invocation and creates all required directories, config.json, and the LadybugDB database. No manual setup is required. It also registers the `weave:update` cron job (midnight daily) for automatic self-updates.
+| `weave.journal` | Write journal |
+| `weave.update` | Self-update |
 
 ## Dependencies
 
-**OCAS Skills**
-- [Elephas](https://github.com/indigokarasu/elephas) -- Chronicle enrichment read-only
-- [Scout](https://github.com/indigokarasu/scout) -- OSINT findings as upsert candidates
-- [Dispatch](https://github.com/indigokarasu/dispatch) -- social context for communication drafting
-
-**External**
-- LadybugDB -- embedded single-file graph database (auto-created at `{agent_root}/commons/db/ocas-weave/weave.lbug`)
-- Google Contacts (optional bidirectional sync)
-- Clay (optional bidirectional sync -- Clay is enrichment source, Weave provenance wins conflicts)
+- [Elephas](https://github.com/indigokarasu/elephas) — Chronicle enrichment
+- [Scout](https://github.com/indigokarasu/scout) — OSINT findings as upsert candidates
+- LadybugDB (embedded graph database)
+- Google Contacts, Clay (optional sync)
 
 ## Scheduled Tasks
 
-| Job | Mechanism | Schedule | Command |
-|---|---|---|---|
-| `weave:update` | cron | `0 0 * * *` (midnight daily) | Self-update from GitHub source |
+| Job | Schedule | Command |
+|---|---|---|
+| `weave:update` | `0 0 * * *` | Self-update |
 
 ## Changelog
 
 ### v3.3.1 — April 26, 2026
-- Removed ad-hoc migration scratch scripts (`scripts/weave_enrich.py`, `scripts/weave_upsert.py`, `scripts/weave_upsert_batch.py`) — git history is the archive
-- Removed SKILL.md references to nonexistent `scripts/weave_sync_inbound.py` / `scripts/weave_sync_outbound.py`; canonical implementation is `scripts/google_sync.py` (single-invocation inbound + outbound)
+- Removed stale migration scripts, cleaned SKILL.md references
 
 ### v2.6.0 — April 12, 2026
-- Document Google Contacts sync procedure, OAuth scopes, and pitfalls; Clay → Mesh MCP migration note
+- Documented Google Contacts sync procedure and pitfalls
 
-### v2.4.0 -- April 2, 2026
-- Structured entity observations in journal payloads (`entities_observed`, `relationships_observed`, `preferences_observed`)
-- `user_relevance` tagging on journal observations and optional signal emission (default `user` for social graph entities)
-- Elephas journal cooperation in skill cooperation section
+### v2.0.0 — March 18, 2026
+- Initial release
 
-### v2.3.0 -- March 27, 2026
-- Added `weave.update` command and midnight cron for automatic version-checked self-updates
-
-### v2.2.0 -- March 22, 2026
-- Routing improvements
 ---
 
-*Weave is part of the [OCAS Agent Suite](https://github.com/indigokarasu) -- a collection of interconnected skills for personal intelligence, autonomous research, and continuous self-improvement. Each skill owns a narrow responsibility and communicates with others through structured signal files, shared journals, and Chronicle, a long-term knowledge graph that accumulates verified facts over time.*
+*Weave is part of the [OCAS Agent Suite](https://github.com/indigokarasu).*

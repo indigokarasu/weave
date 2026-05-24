@@ -1,0 +1,27 @@
+{
+  "skill": "ocas-weave",
+  "version": "1.0.0",
+  "description": "Evaluation test cases for ocas-weave",
+  "evals": [
+    {
+      "input": "Who do I know in San Francisco?",
+      "expected_output": "Returns list of contacts in SF with relationship context",
+      "description": "City connection query"
+    },
+    {
+      "input": "What does Alice like for gifts?",
+      "expected_output": "Returns gift preferences based on known data about Alice",
+      "description": "Preference query"
+    },
+    {
+      "input": "Add a new person I met at the conference",
+      "expected_output": "Creates a new Person record with provenance metadata",
+      "description": "Contact creation"
+    },
+    {
+      "input": "Sync contacts with Google Contacts",
+      "expected_output": "Runs bidirectional sync between Weave and Google Contacts",
+      "description": "Contact sync"
+    }
+  ]
+}

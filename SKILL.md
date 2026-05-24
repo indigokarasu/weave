@@ -58,21 +58,7 @@ Read `references/ladybugdb-guide.md` for query result handling, iteration pitfal
 
 ## Storage layout
 
-```
-{agent_root}/commons/data/ocas-weave/
-  intents.jsonl        — pending intents queued for retry (degraded mode)
-  evidence.jsonl       — evidence records for every sync/write run
-  sync_log.jsonl       — sync activity log
-
-{agent_root}/commons/db/ocas-weave/
-  weave.lbug          — LadybugDB database (auto-created on first use)
-  config.json         — connector and sync configuration
-  staging/            — temporary import/export files
-
-{agent_root}/commons/journals/ocas-weave/
-  YYYY-MM-DD/
-    {run_id}.json     — one journal per run
-```
+See `references/schemas.md` for the storage layout.
 
 Default config.json:
 ```json
@@ -126,7 +112,7 @@ Read `references/init_pattern.md` for the `_open_db` implementation pattern. Ful
 
 **weave.export** -- Export data to staging dir via `COPY TO`. Read `references/import_export.md`.
 
-**weave.sync.google-contacts** -- Run bidirectional Google Contacts sync. Read `references/connectors.md` before any sync. Outbound requires `writeback.google_contacts: true` in config.
+**weave.sync.google-contacts** — Run bidirectional Google Contacts sync. Read `references/connectors.md` before any sync. Outbound requires enabling `writeback.google_contacts` in config (see `references/connectors.md`).
 
 **weave.sync.clay** -- Bidirectional sync with Clay. Read `references/connectors.md`. Outbound requires `writeback.clay: true` AND explicit approval.
 
@@ -138,13 +124,7 @@ Read `references/init_pattern.md` for the `_open_db` implementation pattern. Ful
 
 **weave.status** -- Report graph health and config state.
 
-```cypher
-CALL show_tables() RETURN *;
-MATCH (p:Person) RETURN count(p) AS people;
-MATCH ()-[r:Knows]->() RETURN count(r) AS relationships;
-MATCH (pref:Preference) RETURN count(pref) AS preferences;
-CALL show_warnings() RETURN *;
-```
+See `references/schemas.md` for details.
 
 **weave.journal** -- Write journal for the current run. Read `references/journal.md`. Called at end of every run. Journals are immutable after write.
 
@@ -157,6 +137,7 @@ After every Weave command that reads or writes data:
 1. Persist any new or updated records to the database
 2. Log material decisions to `decisions.jsonl`
 3. Write journal via `weave.journal` — Observation Journal for queries/upserts/imports, Action Journal for syncs/writebacks
+4. **Read-back verification**: After every write operation (`upsert.*`, `sync.*`, `writeback.*`, `import.*), immediately query the database for the affected person/relationship/preference record by its primary key. Confirm the written data matches what was intended — field values, provenance metadata, and confidence scores. Report failure if no row is returned or if any field differs from the intended write. Never claim success unconfirmed.
 
 ## Provenance
 
@@ -185,15 +166,13 @@ When the user uses pronouns or relationship terms (wife, husband, partner, broth
 
 ## Google Contacts sync
 
-Weave maintains bidirectional sync via `scripts/google_sync.py` (inbound then outbound in one invocation, sharing 90 req/min quota).
+Weave maintains bidirectional sync via `scripts/google_sync.py`. All Google Contacts API usage — OAuth scopes, batch sizes, rate limits, snapshot safeguards, and token management — is documented in `references/connectors.md`.
 
+Key rules:
 - Match by `google_resource_name`, then email, then phone. Never match on name alone.
 - Gap-fill only — Weave provenance wins conflicts.
 - Outbound requires `writeback.google_contacts: true` in config AND a previous sync checkpoint.
-- **MUST snapshot contacts before outbound push** (see `references/connectors.md`).
 - Full field sync is mandatory — all fields from `references/google-field-map.md`, including birthdays and relations from Fact/Knows nodes.
-- OAuth: read scopes `contacts` + `contacts.readonly`, write-back needs `contacts`. Pre-flight token check: `references/google-token-quick-check.md`.
-- Token corruption scripts: see `references/google-token-diagnostics.md` for TOKEN_PATH fixes and byte-level verification.
 
 ## Recovery behavior
 
@@ -224,7 +203,6 @@ This skill implements the recovery contract from `spec-ocas-recovery.md`.
 - **Separate enrichment skills**: All enrichment workflow lives in this skill. Merge any accidental duplicates.
 - **`HasFact` has no properties**: `CREATE (p)-[:HasFact]->(f)` only — no property bags allowed.
 - **Wrong enrichment pipeline**: Manual enrichment = full Scout→Sift→Sherlock pipeline. Do NOT shortcut with raw SearXNG regex alone.
-- **Inline credential code triggers security auditors**: All credential diagnostics live in `references/google-token-diagnostics.md`.
 - **Tool output truncation**: `read_file`/`terminal` may truncate paths (e.g., `/root/...json`). This is a display artifact — verify with raw reads before fixing. In Apr–May 2026, 25+ minutes were lost to this false positive.
 - **TOKEN_PATH corruption**: Can be caused by `read_file` truncation being written back, or sed/asterisk replacement. See `references/google-token-diagnostics.md`.
 - **`write_file` line number prefix injection**: Using `write_file` after `read_file` can inject line numbers into scripts. Use direct Python file I/O or `sed` instead.

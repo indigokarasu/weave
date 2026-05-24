@@ -238,3 +238,33 @@ For `COPY Person FROM 'file.csv' (header=true)`. Column names must match field n
 
 Required: id (generate UUID if absent), name, source_type (default: imported), source_ref (default: filename), confidence (default: 0.8), record_time (default: now)
 Optional: name_given, name_family, email, phone, location_city, location_country, occupation, org, notes, google_resource_name, clay_id, event_time, valid_from, valid_until
+
+## Storage Layout
+
+```
+{agent_root}/commons/data/ocas-weave/
+  intents.jsonl        — pending intents queued for retry (degraded mode)
+  evidence.jsonl       — evidence records for every sync/write run
+  sync_log.jsonl       — sync activity log
+
+{agent_root}/commons/db/ocas-weave/
+  weave.lbug          — LadybugDB database (auto-created on first use)
+  config.json         — connector and sync configuration
+  staging/            — temporary import/export files
+
+{agent_root}/commons/journals/ocas-weave/
+  YYYY-MM-DD/
+    {run_id}.json     — one journal per run
+```
+
+
+## Default Configuration
+
+```cypher
+CALL show_tables() RETURN *;
+MATCH (p:Person) RETURN count(p) AS people;
+MATCH ()-[r:Knows]->() RETURN count(r) AS relationships;
+MATCH (pref:Preference) RETURN count(pref) AS preferences;
+CALL show_warnings() RETURN *;
+```
+

@@ -10,10 +10,28 @@ description: 'Weave: private provenance-backed social graph. Maintains queryable
 
   '
 license: MIT
+source: https://github.com/indigokarasu/weave
+includes:
+  - references/**
+  - scripts/**
+
 metadata:
   author: Indigo Karasu
   version: 3.5.0
 ---
+## When to Use
+
+- Contact management and relationship tracking
+- Social graph queries (who knows whom, how)
+- Contact enrichment from multiple sources
+- Relationship strength and interaction history
+- When any skill needs contact or relationship data
+## When NOT to Use
+
+- Sending messages or emails (use Dispatch)
+- Calendar management (use Sands)
+- OSINT research (use Scout)
+- Knowledge graph entity resolution (use Elephas)
 
 # Weave
 
@@ -35,7 +53,7 @@ Weave does not: perform OSINT research (Scout), manage calendars (Sands), organi
 - Discover serendipity connections between people
 - Sync contacts from Google Contacts or Clay
 
-## When not to use
+## When NOT to use
 
 - Web research without a social graph need — use Sift
 - OSINT investigations on people — use Scout
@@ -58,29 +76,7 @@ Read `references/ladybugdb-guide.md` for query result handling, iteration pitfal
 
 ## Storage layout
 
-See `references/schemas.md` for the storage layout.
-
-Default config.json:
-```json
-{
-  "skill_id": "ocas-weave",
-  "skill_version": "2.3.0",
-  "config_version": "1",
-  "created_at": "",
-  "updated_at": "",
-  "writeback": {
-    "google_contacts": false,
-    "clay": false
-  },
-  "last_sync": {
-    "google_contacts": null,
-    "clay": null
-  },
-  "retention": {
-    "days": 0
-  }
-}
-```
+See `references/schemas.md` for the storage layout. See `references/config-defaults.md` for the default `config.json` structure, writeback flags, and retention settings.
 
 ## Database rules
 
@@ -98,37 +94,37 @@ Read `references/init_pattern.md` for the `_open_db` implementation pattern. Ful
 
 ## Commands
 
-**weave.upsert.person** -- Add or update a person. Auto-inits DB on first call. MERGE on `id`. Read back after write; report failure if no row returned — never claim success unconfirmed.
+**weave.upsert.person** — Add or update a person. Auto-inits DB on first call. MERGE on `id`. Read back after write; report failure if no row returned — never claim success unconfirmed.
 
-**weave.upsert.relationship** -- Add or update a `Knows` edge. Confirm both Person nodes exist first. Halt and report which is missing.
+**weave.upsert.relationship** — Add or update a `Knows` edge. Confirm both Person nodes exist first. Halt and report which is missing.
 
-**weave.upsert.preference** -- Store a provenance-backed preference. Each preference is a distinct `CREATE` (not merged). Link to Person via `HasPreference` edge.
+**weave.upsert.preference** — Store a provenance-backed preference. Each preference is a distinct `CREATE` (not merged). Link to Person via `HasPreference` edge.
 
-**weave.import.csv** -- Bulk import contacts via `COPY FROM`. Read `references/import_export.md`. Pre-process CSV to staging dir first. Check `CALL show_warnings() RETURN *` after. Report: N imported, N skipped (with reasons), N failed.
+**weave.import.csv** — Bulk import contacts via `COPY FROM`. Read `references/import_export.md`. Pre-process CSV to staging dir first. Check `CALL show_warnings() RETURN *` after. Report: N imported, N skipped (with reasons), N failed.
 
-**weave.query** -- Query the graph. Read `references/query_patterns.md`. Modes: `lookup`, `connection`, `serendipity`, `city`, `summarize`, `gift`. Return only stored facts with provenance. Never speculate.
+**weave.query** — Query the graph. Read `references/query_patterns.md`. Modes: `lookup`, `connection`, `serendipity`, `city`, `summarize`, `gift`. Return only stored facts with provenance. Never speculate.
 
-**weave.attach** -- Query an external skill database read-only. Read `references/cross_db.md`.
+**weave.attach** — Query an external skill database read-only. Read `references/cross_db.md`.
 
-**weave.export** -- Export data to staging dir via `COPY TO`. Read `references/import_export.md`.
+**weave.export** — Export data to staging dir via `COPY TO`. Read `references/import_export.md`.
 
 **weave.sync.google-contacts** — Run bidirectional Google Contacts sync. Read `references/connectors.md` before any sync. Outbound requires enabling `writeback.google_contacts` in config (see `references/connectors.md`).
 
-**weave.sync.clay** -- Bidirectional sync with Clay. Read `references/connectors.md`. Outbound requires `writeback.clay: true` AND explicit approval.
+**weave.sync.clay** — Bidirectional sync with Clay. Read `references/connectors.md`. Outbound requires `writeback.clay: true` AND explicit approval.
 
-**weave.project.vcard** -- Generate vCard 4.0 draft. Read `references/vcard_projection.md`. Omit fields with confidence below 0.7. Requires explicit approval before writeback.
+**weave.project.vcard** — Generate vCard 4.0 draft. Read `references/vcard_projection.md`. Omit fields with confidence below 0.7. Requires explicit approval before writeback.
 
-**weave.writeback.contacts** -- Push records to Google Contacts or Clay. Disabled by default. Requires config enablement AND per-action user approval.
+**weave.writeback.contacts** — Push records to Google Contacts or Clay. Disabled by default. Requires config enablement AND per-action user approval.
 
-**weave.init** -- Diagnostic and repair. Checks schema, creates missing tables, verifies indexes.
+**weave.init** — Diagnostic and repair. Checks schema, creates missing tables, verifies indexes.
 
-**weave.status** -- Report graph health and config state.
+**weave.status** — Report graph health and config state.
 
 See `references/schemas.md` for details.
 
-**weave.journal** -- Write journal for the current run. Read `references/journal.md`. Called at end of every run. Journals are immutable after write.
+**weave.journal** — Write journal for the current run. Read `references/journal.md`. Called at end of every run. Journals are immutable after write.
 
-**weave.update** -- Pull latest skill package from GitHub source. Preserves journals and data.
+**weave.update** — Pull latest skill package from GitHub source. Preserves journals and data. See `references/self-update.md`.
 
 ## Run completion
 
@@ -137,7 +133,7 @@ After every Weave command that reads or writes data:
 1. Persist any new or updated records to the database
 2. Log material decisions to `decisions.jsonl`
 3. Write journal via `weave.journal` — Observation Journal for queries/upserts/imports, Action Journal for syncs/writebacks
-4. **Read-back verification**: After every write operation (`upsert.*`, `sync.*`, `writeback.*`, `import.*), immediately query the database for the affected person/relationship/preference record by its primary key. Confirm the written data matches what was intended — field values, provenance metadata, and confidence scores. Report failure if no row is returned or if any field differs from the intended write. Never claim success unconfirmed.
+4. **Read-back verification**: After every write operation (`upsert.*`, `sync.*`, `writeback.*`, `import.*`), immediately query the database for the affected person/relationship/preference record by its primary key. Confirm the written data matches what was intended — field values, provenance metadata, and confidence scores. Report failure if no row is returned or if any field differs from the intended write. Never claim success unconfirmed.
 
 ## Provenance
 
@@ -185,18 +181,7 @@ This skill implements the recovery contract from `spec-ocas-recovery.md`.
 
 ## Constraints
 
-- Never use SQL.
-- Never report a write as successful before read-back confirms it.
-- Never parse or modify `.lbug`, `.wal`, `.shadow`, or `.tmp` files directly.
-- Never write to Chronicle or any other skill's database.
-- Never silently collapse two Person nodes into one.
-- Use ontology standard relationship types in `Knows.rel_type`.
-- Store useful, durable, socially actionable facts only.
-- **No outbound sync without explicit per-sync user approval.**
-- No notes field for structured data — Person.notes column was dropped. Store metadata as Fact nodes with typed predicates.
-- Surface lock errors immediately.
-- Write a journal at the end of every run. Runs missing journals are invalid.
-- Before outbound Google sync, verify Person-level fields are populated. Fact node data is NOT auto-synced to Google — aggregation step required.
+Read `references/constraints.md` for the full constraint set.
 
 ## Pitfalls
 
@@ -212,41 +197,7 @@ This skill implements the recovery contract from `spec-ocas-recovery.md`.
 
 ## OKRs
 
-Universal OKRs from spec-ocas-journal.md apply. Weave-specific:
-
-```yaml
-skill_okrs:
-  - name: person_record_completeness
-    metric: fraction of Person nodes with name + (email or phone) + record_time
-    direction: maximize
-    target: 0.80
-    evaluation_window: 30_runs
-  - name: sync_success_rate
-    metric: fraction of sync runs with zero failed records
-    direction: maximize
-    target: 0.90
-    evaluation_window: 30_runs
-  - name: import_skip_rate
-    metric: fraction of imported rows skipped due to missing required fields
-    direction: minimize
-    target: 0.05
-    evaluation_window: 30_runs
-  - name: query_provenance_coverage
-    metric: fraction of returned facts carrying source_ref and record_time
-    direction: maximize
-    target: 1.0
-    evaluation_window: 30_runs
-  - name: schedule_adherence
-    metric: fraction of scheduled runs completed on time
-    direction: maximize
-    target: 0.95
-    evaluation_window: 30_runs
-  - name: data_integrity
-    metric: fraction of sync runs with no corrupted data
-    direction: maximize
-    target: 0.98
-    evaluation_window: 30_runs
-```
+Read `references/okrs.md` for Weave-specific OKR definitions and targets.
 
 ## Optional skill cooperation
 
@@ -282,13 +233,23 @@ On first invocation of any Weave command, `_open_db()` handles auto-initializati
 
 ## Self-update
 
-`weave.update` pulls the latest package from GitHub. See `references/self-update.md`.
+`weave.update` pulls the latest package from GitHub. See `references/self-update.md` for the full procedure.
 
-## Database Maintenance
+## Database maintenance
 
 See `references/database_maintenance.md`. Key uses: before Google sync, after enrichment runs, periodic health checks.
 
-## Support file map
+## Gotchas
+
+- **Never assume write success without read-back**: After every write operation, immediately query the DB by primary key. Silent write failures corrupt the graph over time.
+- **Lock errors are immediate**: LadybugDB fails instantly if another process holds `READ_WRITE`. Surface the error — do not retry silently or spin-wait.
+- **Person merge is never automatic**: Weave never silently collapses two Person nodes. Always confirm identity before merging; match by `google_resource_name`, email, or phone — never by name alone.
+- **Outbound sync is doubly gated**: Both the config writeback flag AND per-sync user approval are required. Neither alone is sufficient.
+- **Tool output truncation is cosmetic**: `read_file` may display truncated paths (e.g., `/root/...json`). This is a display artifact, not actual corruption. Verify with raw reads before acting.
+- **`HasFact` rejects property bags**: Use `CREATE (p)-[:HasFact]->(f)` only. Adding properties to the relationship will fail.
+- **`Person.notes` column was dropped**: Any reference to `Person.notes` in sync scripts, MERGE, CREATE, RETURN, or parameter dicts will fail at runtime. Verify scripts with Python AST parse.
+
+## Support File Map
 
 | File | When to read |
 |---|---|
@@ -306,12 +267,10 @@ See `references/database_maintenance.md`. Key uses: before Google sync, after en
 | `references/enrichment-pipeline.md` | Overnight enrichment architecture & health checks |
 | `references/sync-pitfalls.md` | Google sync API quota and known pitfalls |
 | `references/self-update.md` | Self-update procedure |
-
-## Update command
-
-```bash
-weave.update
-```
+| `references/config-defaults.md` | Default config structure, writeback flags, retention |
+| `references/constraints.md` | Full constraint set |
+| `references/okrs.md` | OKR definitions and targets |
+| `references/database_maintenance.md` | Before Google sync, after enrichment runs |
 
 ## Visibility
 

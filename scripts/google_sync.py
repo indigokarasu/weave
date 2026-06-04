@@ -24,7 +24,7 @@ AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
 DB_PATH = AGENT_ROOT / 'commons/db/ocas-weave/weave.lbug'
 CONFIG_PATH = AGENT_ROOT / 'commons/data/ocas-weave/config.json'
 # Google Workspace MCP credentials directory
-TOKEN_PATH = Path('/root/.google_workspace_mcp/credentials/google-workspace-user.json')
+TOKEN_PATH='/root/.google_workspace_mcp/credentials/google-workspace-user.json'
 PEOPLE_API_BASE = 'https://people.googleapis.com/v1'
 
 def _log(msg):
@@ -68,11 +68,14 @@ def get_access_token():
 
     if expired and token_data.get('refresh_token'):
         _log('  Token expired, refreshing via urllib...')
+        # Use client credentials from env (the working OAuth app) — fall back to file
+        client_id = os.environ.get('GOOGLE_OAUTH_CLIENT_ID', token_data.get('client_id', ''))
+        client_secret=<GOOGLE_OAUTH_CLIENT_SECRET>('GOOGLE_OAUTH_CLIENT_SECRET', token_data.get('client_secret', ''))
         refresh_data = urllib.parse.urlencode({
-            'client_id': token_data['client_id'],
-            'client_secret=<GOOGLE_OAUTH_CLIENT_SECRET>['client_secret'],
+            'client_id': client_id,
+            'client_secret=<GOOGLE_OAUTH_CLIENT_SECRET>,
             'refresh_token': token_data['refresh_token'],
-            'grant_type': 'refresh_token'
+            'grant_type': 'refresh_token',
         }).encode()
 
         req = urllib.request.Request(

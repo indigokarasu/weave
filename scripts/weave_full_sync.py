@@ -12,7 +12,7 @@ from pathlib import Path
 
 AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
 DB = str(AGENT_ROOT / "commons/db/ocas-weave/weave.lbug")
-TOKEN_PATH = "/root/.google_workspace_mcp/credentials/google-workspace-user.json"
+TOKEN_PATH = "[Google OAuth credentials]google-workspace-user.json"
 LOG_DIR = str(AGENT_ROOT / "data/weave-google-sync")
 os.makedirs(LOG_DIR, exist_ok=True)
 

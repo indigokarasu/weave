@@ -258,7 +258,7 @@ def sync_outbound_google(db, creds, last_sync_at):
 - Clear invalid fields rather than pushing bad data to Google
 
 **Token path:**
-- The sync scripts read from `/root/.google_workspace_mcp/credentials/google-workspace-user.json` (managed by Google Workspace MCP server)
+- The sync scripts read from `[Google OAuth credentials]google-workspace-user.json` (managed by Google Workspace MCP server)
 - This file is kept up-to-date by the MCP server's OAuth flow
 - If the refresh token dies, re-auth through the MCP (see ocas-custodian/google-workspace-auth-troubleshooting.md)
 

@@ -56,13 +56,13 @@ Recalculation: `{skill_root}/scripts/recalculate_enrichability.py` (run nightly 
 
 ## Expected Skip Rate
 
-As of May 2026, the overnight enrichment pipeline skips **~84% of contacts** (165/196 in the May 31 run). The majority are "no search results from SearXNG" — the person has no publicly-indexed professional web presence, or SearXNG's index doesn't surface it. This is expected and not a failure. The remaining ~16% are enriched with at least one field.
+As of June 2026, the overnight enrichment pipeline skips **~89% of contacts** (170/193 in the June 03 run). The majority are "no search results from SearXNG" — the person has no publicly-indexed professional web presence, or SearXNG's index doesn't surface it. This is expected and not a failure. The remaining ~11% are enriched with at least one field.
 
 The enrichment-pipeline.md previously estimated "~65%" — that figure is stale. The higher skip rate reflects both that many contacts genuinely lack web presence and that SearXNG's coverage of professional profiles has limitations (particularly for non-US, non-tech, and non-public-figure names).
 
 ## Re-processing pitfall
 
-The progress file tracks all contacted person IDs, but ~84% of searches return "no extractable data." If the filter excludes ALL progress-file IDs permanently, contacts that failed enrichment are never retried.
+The progress file tracks all contacted person IDs, but ~89% of searches return "no extractable data." If the filter excludes ALL progress-file IDs permanently, contacts that failed enrichment are never retried.
 
 **Do NOT filter by progress file at all.** The enrichment logic (`enrich_weave_contact`) only fills fields that are currently NULL/empty in the database — writing the same value twice is harmless. Filtering by progress entries caused a bug (Apr 2026): contacts with partial enrichment (e.g., `location_city` found, but `org` and `occupation` still missing) were permanently excluded because they had a non-empty `fields` entry in progress.jsonl. The simplest correct approach: query contacts with gaps directly from the database, skip no one, and let the SET clause only fill what's missing. The progress file should be used for logging/monitoring only, not for filtering candidates.
 
@@ -74,12 +74,91 @@ Note: progress.jsonl uses the `id` field (not `contact_id`) for contact identifi
 
 Recurring errors in progress.jsonl (e.g., `Connection.execute() got unexpected keyword argument 'occupation'`) indicate script bugs; truncate the file to clear stale entries and patch the script.
 
+### Deduplication procedure
+
+When duplicate rate exceeds 10%, deduplicate by keeping only the latest entry per contact ID:
+
+```python
+import json
+entries = {}
+with open('progress.jsonl') as f:
+    for line in f:
+        entry = json.loads(line.strip())
+        eid = entry.get('id', '')
+        if eid:
+            entries[eid] = line.strip()  # Last entry wins
+with open('progress.jsonl', 'w') as f:
+    for line in entries.values():
+        f.write(line + '\n')
+```
+
+## Environment setup for cron jobs and agent sessions
+
+**Critical**: When running weave scripts from a cron job or agent session, always set environment variables explicitly:
+
+```bash
+HOME=/root AGENT_ROOT=<hermes-root> python3 {skill_root}/scripts/overnight_enrichment.py
+```
+
+**Why**: The agent's `HOME` is set to the profile home directory (`<hermes-home>/home/`), which causes:
+- `Path.home()` in scripts to resolve to the wrong `.hermes` directory
+- LadybugDB extensions to be searched in the wrong `.lbdb` path
+- The weave database file to not be found (`weave.lbug` not found at the resolved path)
+
+If LadybugDB extensions are missing from the profile's `.lbdb` directory, copy them from the system directory:
+```bash
+cp -r /root/.lbdb/extension/0.15.0/linux_amd64/json \
+      <hermes-home>/home/.lbdb/extension/0.15.0/linux_amd64/json
+```
+
+**Do NOT set `updated_at` on Person nodes** — this property does not exist in the schema. Use only the properties listed in `references/schemas.md`. The Person node has: id, name, name_given, name_family, email, phone, location_city, location_country, occupation, org, notes, google_resource_name, clay_id, source_type, source_ref, confidence, event_time, record_time, valid_from, valid_until.
+
+## overnight_enrichment.py `sync_to_google()` failure (June 2026)
+
+**Known issue**: The `overnight_enrichment.py` script's built-in `sync_to_google()` function calls `google_sync.py` via subprocess. When the script is run under the venv Python 3.11, `google_sync.py` inherits the venv Python which lacks the `ladybug` module (DB version 41). This causes `ModuleNotFoundError: No module named 'ladybug'` during the final sync.
+
+**Symptom**: The enrichment log shows `Final Google Contacts sync...` followed by `ModuleNotFoundError` or the sync returns exit code 1.
+
+**Fix**: Always invoke `overnight_enrichment.py` with system Python 3.13:
+```bash
+HOME=/root /usr/bin/python3 {skill_root}/scripts/overnight_enrichment.py
+```
+
+**Workaround**: Run the final Google sync manually after enrichment completes:
+```bash
+cd {skill_root} && HOME=/root /usr/bin/python3 -u scripts/google_sync.py
+```
+
+**Note**: Even with system Python, outbound sync will fail if the OAuth token only has `contacts.readonly` scope. The sync will still complete inbound successfully — just skip outbound.
+
+## enrichment_control.py command reference
+
+The `enrichment_control.py` script only supports three commands:
+- `start [--duration 8h|5h|1h|30m]` — Start the enrichment pipeline
+- `stop` — Stop the enrichment pipeline
+- `status` — Show enrichment status (running/stopped, progress)
+
+**There are no `list` or `write` commands.** These were from the old `enrichment_data.py` which no longer exists. To get contacts needing enrichment, query the Weave DB directly (see query patterns in `references/query_patterns.md`).
+
+## SearXNG Degradation Pattern (June 2026)
+
+When SearXNG engines become unresponsive (rate-limited, CAPTCHAs), `searxng_search()` returns 0 results **without raising an exception** — it returns an empty list. This causes contacts to be logged as `"no search results, skipping"` rather than `"SearXNG error"`. Monitor the log for consecutive `"no search results"` entries — if >5 in a row, SearXNG is likely degraded.
+
+Common unresponsive engine patterns (June 2026):
+- `brave`: `"Suspended: too many requests"` — rate limit, recovers after ~30 min
+- `duckduckgo`: `"CAPTCHA"` — requires CAPTCHA solving, may persist for hours
+- `karmasearch`: `"Suspended: access denied"` — intermittent
+
+**Diagnostic**: `curl -s "http://localhost:8888/search?q=test&format=json&limit=1" | python3 -c "import json,sys; d=json.load(sys.stdin); r=d.get('results',[]); u=d.get('unresponsive_engines',[]); print(f'Results: {len(r)}, Unresponsive: {len(u)}'); [print(f'  {e}') for e in u[:3]]"`
+
+**Recovery**: `docker restart searxng` (or `systemctl restart searxng`), wait 15-30s. If results stay <5, >50% of engines are still degraded — log `degraded:searxng` in evidence and continue with reduced enrichment yield.
+
 ## Enrichment Pipeline Health Check
 
 Run these checks periodically (e.g., via cron) to verify pipeline health:
 
 1. Check if enrichment process is running: `ps aux | grep overnight_weave_enrichment | grep -v grep`
-2. If not running and before 6am PDT, restart: `python3 {agent_root}/scripts/overnight_weave_enrichment.py`
+2. If not running and before 6am PDT, restart: `HOME=/root AGENT_ROOT=<hermes-root> python3 {agent_root}/scripts/overnight_weave_enrichment.py`
 3. Check progress.jsonl duplicates: Count unique `id` values vs total entries; truncate if duplicate rate >10%
 4. Check enrichment stats: `cat {agent_root}/data/weave-enrichment/stats.json`
 5. Check last sync time: `cat {agent_root}/commons/db/ocas-weave/config.json | grep last_sync`

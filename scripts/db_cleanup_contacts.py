@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
 
 # Use MCP credentials directory
-CREDS_DIR = Path('/root/.google_workspace_mcp/credentials')
+CREDS_DIR = Path('/root/.google_Google services/credentials')
 TOKEN_PATH = CREDS_DIR / 'google-workspace-user.json'
 
 # Add the Google Workspace skill scripts to path

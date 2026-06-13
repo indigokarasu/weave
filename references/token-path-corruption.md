@@ -48,8 +48,8 @@ print(f'Has gmail.com.json: {b\"gmail.com.json\" in line}')
 python3 -c "import ast; ast.parse(open('/path/to/script.py').read()); print('OK')"
 
 # Verify token file is non-empty
-ls -la /root/.google_workspace_mcp/credentials/google-workspace-user.json
-python3 -c "import json; td=json.load(open('/root/.google_workspace_mcp/credentials/google-workspace-user.json')); print(f'Token file OK, scopes: {len(td.get(\"scopes\", []))} scopes')"
+ls -la the Google OAuth credential file atgoogle-workspace-user.json
+python3 -c "import json; td=json.load(open('the Google OAuth credential file atgoogle-workspace-user.json')); print(f'Token file OK, scopes: {len(td.get(\"scopes\", []))} scopes')"
 ```
 
 ## Fix Procedure

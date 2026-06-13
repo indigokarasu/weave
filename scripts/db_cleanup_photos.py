@@ -12,7 +12,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 # Use MCP credentials directory
-CREDS_DIR = Path('/root/.google_workspace_mcp/credentials')
+CREDS_DIR = Path('/root/.google_Google services/credentials')
 TOKEN_PATH = CREDS_DIR / 'google-workspace-user.json'
 
 with open(TOKEN_PATH) as f:

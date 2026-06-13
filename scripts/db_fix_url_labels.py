@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 
 AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
-TOKEN_PATH = '/root/.google_workspace_mcp/credentials/google-workspace-user.json'
+TOKEN_PATH = '[Google OAuth credentials]google-workspace-user.json'
 BASE = "https://people.googleapis.com/v1"
 
 # Known social site → canonical label

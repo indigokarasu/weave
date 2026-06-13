@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.13
 """
 Bidirectional Google Contacts sync for Weave.
 1. Inbound: Google Contacts → Weave
@@ -18,6 +18,11 @@ import urllib.error
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Set LadybugDB extension path before importing ladybug
+os.environ['LADYBUG_EXTENSION_PATH'] = str(
+    Path('<hermes-home>/home/.lbdb/extension/0.17.0/linux_amd64')
+)
 
 # Paths
 AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
@@ -142,7 +147,7 @@ def _validate_phone(phone):
 
 def sync_inbound(db, token):
     """Pull contacts FROM Google INTO Weave using REST API."""
-    import real_ladybug as lb
+    import ladybug as lb
 
     conn = lb.Connection(db)
     now = datetime.now(timezone.utc).isoformat()
@@ -268,7 +273,7 @@ def sync_outbound(db, token, last_sync_at):
     On 429: exponential backoff starting at 5s. On 404: clears stale google_resource_name.
     On 400 FAILED_PRECONDITION: re-fetch etag and retry once.
     """
-    import real_ladybug as lb
+    import ladybug as lb
 
     conn = lb.Connection(db)
 
@@ -529,7 +534,7 @@ def main():
         _log("ERROR: Failed to get access token")
         sys.exit(1)
 
-    import real_ladybug as lb
+    import ladybug as lb
     _log("Opening Weave database...")
     db = lb.Database(str(DB_PATH))
 

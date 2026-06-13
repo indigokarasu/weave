@@ -42,7 +42,7 @@ from pathlib import Path
 # Paths
 AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
 SNAPSHOTS_DIR = AGENT_ROOT / 'commons/db/ocas-weave/snapshots'
-TOKEN_PATH='/root/.google_workspace_mcp/credentials/google-workspace-user.json'
+TOKEN_PATH='[Google OAuth credentials]google-workspace-user.json'
 PEOPLE_API_BASE = 'https://people.googleapis.com/v1'
 
 # Fields to snapshot (all mutable contact fields)

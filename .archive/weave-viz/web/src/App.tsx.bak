@@ -1,0 +1,1397 @@
+import React, { useState, useEffect, useCallback, useRef, Component } from 'react';
+import * as d3 from 'd3';
+import './styles/App.css';
+
+// ── Error Boundary ──
+interface ErrorBoundaryState { hasError: boolean; error: string }
+class ErrorBoundary extends Component<{ children: React.ReactNode }, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { hasError: false, error: '' }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error: error.message }
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 40, fontFamily: 'sans-serif' }}>
+          <h1>Something went wrong</h1>
+          <pre style={{ background: '#f5f5f5', padding: 16, borderRadius: 8, overflow: 'auto' }}>
+            {this.state.error}
+          </pre>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+// ── Types ──
+interface GraphNode {
+  id: string; name: string; email: string; org: string; occupation: string;
+  location_city: string; location_country: string; confidence: number;
+  source_type: string; preference_count: number; fact_count: number;
+  color: string; x: number; y: number; vx: number; vy: number;
+  fx?: number | null; fy?: number | null;
+}
+
+interface GraphLink {
+  source: string; target: string; rel_type: string;
+  strength: number; context: string; confidence: number;
+}
+
+interface GraphData {
+  nodes: GraphNode[]; links: GraphLink[];
+  stats: { total_nodes: number; total_links: number; total_preferences: number; total_facts: number; };
+}
+
+interface PersonDetail {
+  person: Record<string, any>;
+  preferences: Record<string, any>[];
+  facts: Record<string, any>[];
+  connections_out: { name: string; id: string; rel_type: string; strength: number; context: string; }[];
+  connections_in: { name: string; id: string; rel_type: string; strength: number; context: string; }[];
+}
+
+interface Toast {
+  id: string; type: 'success' | 'error'; message: string;
+}
+
+interface UndoEntry {
+  type: 'create_person' | 'create_relationship' | 'create_preference' | 'delete_person' | 'delete_relationship' | 'edit_person';
+  description: string;
+  undo: () => Promise<boolean>;
+}
+
+// ── Grouping strategy ──
+type GroupMode = 'default' | 'company' | 'education' | 'city' | 'tag';
+
+const REL_COLORS: Record<string, string> = {
+  colleague_of: '#2563EB', friend_of: '#16A34A', family_of: '#D97706',
+  coauthor: '#7C3AED', shared_field: '#0891B2', former_colleague: '#F59E0B',
+  colleague: '#3B82F6', knows: '#6B7280',
+};
+
+function getRelColor(relType: string): string {
+  return REL_COLORS[relType] || '#6B7280';
+}
+
+function hashString(s: string): number {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h) + s.charCodeAt(i);
+  return h & 0xFFFFFFFF;
+}
+
+function orgColor(org: string): string {
+  if (!org) return '#9CA3AF';
+  const h = hashString(org);
+  const hue = h % 360;
+  const sat = 40 + (h % 30);
+  const lit = 45 + (h % 20);
+  return `hsl(${hue}, ${sat}%, ${lit}%)`;
+}
+
+// Group color: deterministic hue from a string
+function groupColor(key: string): string {
+  if (!key) return '#9CA3AF';
+  const h = hashString(key);
+  const hue = h % 360;
+  return `hsl(${hue}, 55%, 55%)`;
+}
+
+// Get the group key for a node based on grouping mode
+function getGroupKey(node: GraphNode, mode: GroupMode): string {
+  switch (mode) {
+    case 'company': return node.org || '(no org)';
+    case 'education': return node.occupation || '(no role)';
+    case 'city': return node.location_city || '(unknown)';
+    case 'tag': {
+      // Derive tag from relationship types this node participates in
+      // We don't have links here, so fallback to org+location bucket
+      return [node.org, node.location_city].filter(Boolean).join(' · ') || '(ungrouped)';
+    }
+    default: return '';
+  }
+}
+
+async function apiPost(path: string, body: any): Promise<any> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+  return data;
+}
+
+// ── Toast component ──
+function Toaster({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: string) => void }) {
+  useEffect(() => {
+    if (toasts.length === 0) return;
+    const timer = setTimeout(() => dismiss(toasts[0].id), 4000);
+    return () => clearTimeout(timer);
+  }, [toasts, dismiss]);
+
+  return (
+    <div className="toast-container">
+      {toasts.map(t => (
+        <div key={t.id} className={`toast toast-${t.type}`} onClick={() => dismiss(t.id)}>
+          {t.type === 'success' ? '✓' : '✗'} {t.message}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Edit form: Create Person ──
+function EditPersonForm({ onClose, onSubmit, initial }: {
+  onClose: () => void; onSubmit: (data: any) => Promise<void>;
+  initial?: Partial<GraphNode>;
+}) {
+  const [name, setName] = useState(initial?.name || '');
+  const [email, setEmail] = useState(initial?.email || '');
+  const [org, setOrg] = useState(initial?.org || '');
+  const [occupation, setOccupation] = useState(initial?.occupation || '');
+  const [location, setLocation] = useState(initial?.location_city || '');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async () => {
+    if (!name.trim()) { setError('Name is required'); return; }
+    setSubmitting(true);
+    setError('');
+    try {
+      await onSubmit({ ...initial, name: name.trim(), email: email.trim(), org: org.trim(), occupation: occupation.trim(), location_city: location.trim() });
+    } catch (e: any) {
+      setError(e.message);
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="edit-form">
+      <div className="edit-form-header">
+        <h3>{initial?.id ? 'Edit Person' : 'Add Person'}</h3>
+        <button className="close-btn" onClick={onClose}>×</button>
+      </div>
+      <div className="edit-form-body">
+        {error && <div className="error">{error}</div>}
+        <input placeholder="Name *" value={name} onChange={e => setName(e.target.value)} />
+        <input placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
+        <input placeholder="Organization" value={org} onChange={e => setOrg(e.target.value)} />
+        <input placeholder="Occupation" value={occupation} onChange={e => setOccupation(e.target.value)} />
+        <input placeholder="Location (City, State)" value={location} onChange={e => setLocation(e.target.value)} />
+        <button className="btn-primary" onClick={handleSubmit} disabled={!name.trim() || submitting}>
+          {submitting ? 'Saving…' : (initial?.id ? 'Update' : 'Add Person')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Edit form: Create Relationship ──
+function EditRelationshipForm({ nodes, onClose, onSubmit }: {
+  nodes: GraphNode[]; onClose: () => void; onSubmit: (data: any) => Promise<void>;
+}) {
+  const [sourceQuery, setSourceQuery] = useState('');
+  const [targetQuery, setTargetQuery] = useState('');
+  const [relType, setRelType] = useState('colleague_of');
+  const [context, setContext] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [sourceId, setSourceId] = useState('');
+  const [targetId, setTargetId] = useState('');
+  const [showSource, setShowSource] = useState(false);
+  const [showTarget, setShowTarget] = useState(false);
+
+  const filteredSource = sourceQuery ? nodes.filter(n => n.name.toLowerCase().includes(sourceQuery.toLowerCase())).slice(0, 8) : [];
+  const filteredTarget = targetQuery ? nodes.filter(n => n.name.toLowerCase().includes(targetQuery.toLowerCase())).slice(0, 8) : [];
+
+  const handleSubmit = async () => {
+    if (!sourceId || !targetId) { setError('Select both people'); return; }
+    if (sourceId === targetId) { setError('Source and target must be different'); return; }
+    setSubmitting(true);
+    setError('');
+    try {
+      await onSubmit({ source_id: sourceId, target_id: targetId, rel_type: relType, context });
+    } catch (e: any) {
+      setError(e.message);
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="edit-form">
+      <div className="edit-form-header">
+        <h3>Add Relationship</h3>
+        <button className="close-btn" onClick={onClose}>×</button>
+      </div>
+      <div className="edit-form-body">
+        {error && <div className="error">{error}</div>}
+        <div className="edit-form-autocomplete">
+          <input placeholder="From person…" value={showSource ? sourceQuery : nodes.find(n => n.id === sourceId)?.name || ''}
+            onChange={e => { setSourceQuery(e.target.value); setShowSource(true); }} onFocus={() => setShowSource(true)} onBlur={() => setTimeout(() => setShowSource(false), 200)} />
+          {showSource && filteredSource.length > 0 && (
+            <div className="edit-form-dropdown">
+              {filteredSource.map(n => <div key={n.id} className="edit-form-option" onMouseDown={() => { setSourceId(n.id); setSourceQuery(n.name); setShowSource(false); }}>{n.name}</div>)}
+            </div>
+          )}
+        </div>
+        <div className="edit-form-autocomplete">
+          <input placeholder="To person…" value={showTarget ? targetQuery : nodes.find(n => n.id === targetId)?.name || ''}
+            onChange={e => { setTargetQuery(e.target.value); setShowTarget(true); }} onFocus={() => setShowTarget(true)} onBlur={() => setTimeout(() => setShowTarget(false), 200)} />
+          {showTarget && filteredTarget.length > 0 && (
+            <div className="edit-form-dropdown">
+              {filteredTarget.map(n => <div key={n.id} className="edit-form-option" onMouseDown={() => { setTargetId(n.id); setTargetQuery(n.name); setShowTarget(false); }}>{n.name}</div>)}
+            </div>
+          )}
+        </div>
+        <select value={relType} onChange={e => setRelType(e.target.value)}>
+          {Object.keys(REL_COLORS).map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+        </select>
+        <input placeholder="Context (optional)" value={context} onChange={e => setContext(e.target.value)} />
+        <button className="btn-primary" onClick={handleSubmit} disabled={!sourceId || !targetId || submitting || sourceId === targetId}>
+          {submitting ? 'Saving…' : 'Add Relationship'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Edit form: Add Preference ──
+function EditPreferenceForm({ nodes, onClose, onSubmit, initial }: {
+  nodes: GraphNode[]; onClose: () => void; onSubmit: (data: any) => Promise<void>;
+  initial?: { person_id?: string; value?: string; category?: string };
+}) {
+  const [personQuery, setPersonQuery] = useState('');
+  const [value, setValue] = useState(initial?.value || '');
+  const [category, setCategory] = useState(initial?.category || 'interest');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [personId, setPersonId] = useState(initial?.person_id || '');
+  const [showList, setShowList] = useState(false);
+
+  const filtered = personQuery ? nodes.filter(n => n.name.toLowerCase().includes(personQuery.toLowerCase())).slice(0, 8) : [];
+
+  const handleSubmit = async () => {
+    if (!personId) { setError('Select a person'); return; }
+    if (!value.trim()) { setError('Enter a preference'); return; }
+    setSubmitting(true);
+    setError('');
+    try {
+      await onSubmit({ person_id: personId, value: value.trim(), category });
+    } catch (e: any) {
+      setError(e.message);
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="edit-form">
+      <div className="edit-form-header">
+        <h3>{initial?.value ? 'Edit Preference' : 'Add Preference'}</h3>
+        <button className="close-btn" onClick={onClose}>×</button>
+      </div>
+      <div className="edit-form-body">
+        {error && <div className="error">{error}</div>}
+        <div className="edit-form-autocomplete">
+          <input placeholder="Person…" value={showList ? personQuery : nodes.find(n => n.id === personId)?.name || ''}
+            onChange={e => { setPersonQuery(e.target.value); setShowList(true); }} onFocus={() => setShowList(true)} onBlur={() => setTimeout(() => setShowList(false), 200)} />
+          {showList && filtered.length > 0 && (
+            <div className="edit-form-dropdown">
+              {filtered.map(n => <div key={n.id} className="edit-form-option" onMouseDown={() => { setPersonId(n.id); setPersonQuery(n.name); setShowList(false); }}>{n.name}</div>)}
+            </div>
+          )}
+        </div>
+        <input placeholder="What do they like/dislike?" value={value} onChange={e => setValue(e.target.value)} />
+        <select value={category} onChange={e => setCategory(e.target.value)}>
+          <option value="interest">Interest</option><option value="topic">Topic</option>
+          <option value="skill">Skill</option><option value="food">Food</option>
+          <option value="media">Media</option><option value="general">General</option>
+        </select>
+        <button className="btn-primary" onClick={handleSubmit} disabled={!personId || !value.trim() || submitting}>
+          {submitting ? 'Saving…' : (initial?.value ? 'Update' : 'Add Preference')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Delete confirmation modal ──
+function DeleteConfirm({ message, onClose, onConfirm }: { message: string; onClose: () => void; onConfirm: () => Promise<void> }) {
+  const [submitting, setSubmitting] = useState(false);
+  return (
+    <div className="edit-form">
+      <div className="edit-form-header"><h3>Confirm</h3></div>
+      <div className="edit-form-body">
+        <p className="delete-message">{message}</p>
+        <div className="delete-actions">
+          <button className="btn-secondary" onClick={onClose} disabled={submitting}>Cancel</button>
+          <button className="btn-danger" onClick={async () => { setSubmitting(true); await onConfirm(); }} disabled={submitting}>
+            {submitting ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main App ──
+const App: React.FC = () => {
+  console.log('[Weave] App component mounting...');
+
+  // Global error handler for debugging
+  React.useEffect(() => {
+    const handler = (e: ErrorEvent) => {
+      console.error('[Weave] Uncaught error:', e.error?.message || e.message);
+      console.error('[Weave] Stack:', e.error?.stack);
+    };
+    window.addEventListener('error', handler);
+    return () => window.removeEventListener('error', handler);
+  }, []);
+  const [graphData, setGraphData] = useState<GraphData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
+  const [personDetail, setPersonDetail] = useState<PersonDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [relTypeFilter, setRelTypeFilter] = useState<string>('all');
+  const [darkMode, setDarkMode] = useState(false);
+  const [showStats, setShowStats] = useState(true);
+  const [snapshotAge, setSnapshotAge] = useState(0);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [undoStack, setUndoStack] = useState<UndoEntry[]>([]);
+  const [groupMode, setGroupMode] = useState<GroupMode>('default');
+
+  // Edit state
+  const [editMode, setEditMode] = useState(false);
+  const [editPanel, setEditPanel] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ type: string; id?: string; link?: GraphLink; label: string; pref?: Record<string, any>; person_id?: string } | null>(null);
+  const [clickPosition, setClickPosition] = useState<{ x: number; y: number } | null>(null);
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const minimapRef = useRef<HTMLCanvasElement>(null);
+  const simulationRef = useRef<d3.Simulation<GraphNode, GraphLink> | null>(null);
+  const transformRef = useRef(d3.zoomIdentity);
+  const hoveredNodeRef = useRef<GraphNode | null>(null);
+  const adjRef = useRef<Map<string, Set<string>>>(new Map());
+  const dimRef = useRef({ w: 0, h: 0, dpr: 1 });
+  const animFrameRef = useRef<number>(0);
+  const graphDataRef = useRef<GraphData | null>(null);
+  const initialFitDoneRef = useRef(false);
+  const groupModeRef = useRef<GroupMode>('default');
+
+  const addToast = useCallback((type: 'success' | 'error', message: string) => {
+    const id = `${Date.now()}-${Math.random()}`;
+    setToasts(prev => [...prev, { id, type, message }]);
+  }, []);
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
+
+  const pushUndo = useCallback((entry: UndoEntry) => {
+    setUndoStack(prev => [...prev.slice(-19), entry]);
+  }, []);
+
+  const handleUndo = useCallback(async () => {
+    const stack = [...undoStack];
+    const entry = stack.pop();
+    if (!entry) return;
+    const ok = await entry.undo();
+    if (ok) {
+      setUndoStack(stack);
+      addToast('success', `Undone: ${entry.description}`);
+      try {
+        const res = await fetch('/api/graph');
+        const data = await res.json();
+        setGraphData(data);
+        graphDataRef.current = data;
+      } catch { /* ignore */ }
+    } else {
+      addToast('error', `Could not undo: ${entry.description}`);
+    }
+  }, [undoStack, addToast]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [handleUndo]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setEditPanel(null);
+        setDeleteTarget(null);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  // Keep groupModeRef in sync
+  useEffect(() => { groupModeRef.current = groupMode; }, [groupMode]);
+
+  // Fetch graph
+  useEffect(() => {
+    console.log('[Weave] Starting graph fetch...');
+    const fetchData = async () => {
+      try {
+        console.log('[Weave] Fetching /api/graph...');
+        const res = await fetch('/api/graph');
+        console.log('[Weave] Graph response status:', res.status);
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        const data = await res.json();
+        console.log('[Weave] Graph data loaded:', data.nodes?.length, 'nodes');
+        setGraphData(data);
+        graphDataRef.current = data;
+        setError(null);
+      } catch (err: any) {
+        console.error('[Weave] Graph fetch error:', err.message);
+        setError(err.message || 'Failed to load graph data');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+    const healthCheck = async () => {
+      try { const r = await fetch('/api/health'); const h = await r.json(); setSnapshotAge(h.snapshot_age_seconds || 0); } catch { /* */ }
+    };
+    healthCheck();
+    const interval = setInterval(healthCheck, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => { document.documentElement.setAttribute('data-theme', darkMode ? 'dark' : 'light'); }, [darkMode]);
+
+  const fetchPersonDetail = useCallback(async (personId: string) => {
+    setDetailLoading(true);
+    try {
+      const res = await fetch(`/api/person/${personId}`);
+      if (!res.ok) throw new Error('Failed to load person details');
+      const data = await res.json();
+      setPersonDetail(data);
+    } catch (err: any) {
+      console.error(err);
+    } finally { setDetailLoading(false); }
+  }, []);
+
+  // Build adjacency
+  const buildAdjacency = (links: GraphLink[]) => {
+    const adj = new Map<string, Set<string>>();
+    links.forEach(l => {
+      const s = typeof l.source === 'string' ? l.source : (l.source as any).id;
+      const t = typeof l.target === 'string' ? l.target : (l.target as any).id;
+      if (!adj.has(s)) adj.set(s, new Set());
+      if (!adj.has(t)) adj.set(t, new Set());
+      adj.get(s)!.add(t);
+      adj.get(t)!.add(s);
+    });
+    adjRef.current = adj;
+  };
+
+  // Compute group centers for a given grouping mode
+  const computeGroupCenters = (nodes: GraphNode[], mode: GroupMode, w: number, h: number): Map<string, { x: number; y: number }> => {
+    const centers = new Map<string, { x: number; y: number }>();
+    if (mode === 'default') return centers;
+
+    const groups = new Map<string, GraphNode[]>();
+    nodes.forEach(n => {
+      const key = getGroupKey(n, mode);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(n);
+    });
+
+    const groupNames = Array.from(groups.keys()).sort();
+    const count = groupNames.length;
+    if (count === 0) return centers;
+
+    // Arrange groups in a grid or circle depending on count
+    const cols = Math.ceil(Math.sqrt(count));
+    const rows = Math.ceil(count / cols);
+    const cellW = w / (cols + 1);
+    const cellH = h / (rows + 1);
+
+    groupNames.forEach((name, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      centers.set(name, {
+        x: cellW * (col + 1),
+        y: cellH * (row + 1),
+      });
+    });
+
+    return centers;
+  };
+
+  // ── Canvas graph ──
+  const setupCanvasGraph = useCallback(() => {
+    const canvas = canvasRef.current;
+    console.log('[Weave] setupCanvasGraph called, canvas:', !!canvas, 'graphData:', !!graphData);
+    if (!canvas || !graphData || graphData.nodes.length === 0) {
+      console.log('[Weave] setupCanvasGraph early return — canvas:', !!canvas, 'graphData:', !!graphData);
+      return;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) { console.log('[Weave] no 2d context'); return; }
+    console.log('[Weave] Setting up canvas graph with', graphData.nodes.length, 'nodes');
+
+    // Fix: properly handle DPR and preserve aspect ratio on resize
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const w = rect.width;
+    const h = rect.height;
+    dimRef.current = { w, h, dpr };
+
+    // Set the drawing buffer to exact pixel dimensions
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+
+    // Preserve existing zoom transform across resizes
+    const currentTransform = transformRef.current;
+
+    let fNodes = [...graphData.nodes];
+    let fLinks = [...graphData.links];
+
+    // Normalize link source/target to string IDs
+    fLinks = fLinks.map(l => ({
+      ...l,
+      source: typeof l.source === 'string' ? l.source : (l.source as any)?.id || l.source,
+      target: typeof l.target === 'string' ? l.target : (l.target as any)?.id || l.target,
+    }));
+
+    if (relTypeFilter !== 'all') fLinks = fLinks.filter(l => l.rel_type === relTypeFilter);
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      fNodes = fNodes.filter(n => n.name.toLowerCase().includes(q) || n.org.toLowerCase().includes(q) || n.occupation.toLowerCase().includes(q) || n.location_city.toLowerCase().includes(q));
+    }
+    const nodeIds = new Set(fNodes.map(n => n.id));
+    fLinks = fLinks.filter(l => {
+      const sid = typeof l.source === 'string' ? l.source : (l.source as any)?.id;
+      const tid = typeof l.target === 'string' ? l.target : (l.target as any)?.id;
+      return nodeIds.has(sid) && nodeIds.has(tid);
+    });
+    buildAdjacency(fLinks);
+
+    const mode = groupModeRef.current;
+    const groupCenters = computeGroupCenters(fNodes, mode, w, h);
+
+    // Build forces
+    const linkForce = d3.forceLink<GraphNode, any>(fLinks)
+      .id((d: any) => d.id)
+      .distance(d => 80 / (d.strength || 0.5))
+      .strength(d => (d.strength || 0.5) * 0.3);
+
+    const chargeForce = d3.forceManyBody().strength(-200).distanceMax(400);
+    const collisionForce = d3.forceCollide().radius(d => Math.max(8, Math.sqrt((d.preference_count + d.fact_count + 1) * 3)) + 5);
+
+    // Group gravity via d3 forceX/Y (integrated into simulation — reaches equilibrium)
+    const groupForceStrength = mode === 'default' ? 0 : 0.06;
+
+    const groupXForce = d3.forceX<GraphNode>(w / 2).strength(mode === 'default' ? 0.03 : 0.01);
+    const groupYForce = d3.forceY<GraphNode>(h / 2).strength(mode === 'default' ? 0.03 : 0.01);
+
+    if (mode !== 'default' && groupCenters.size > 0) {
+      groupXForce.x(d => {
+        const key = getGroupKey(d, mode);
+        return groupCenters.get(key)?.x ?? (w / 2);
+      });
+      groupYForce.y(d => {
+        const key = getGroupKey(d, mode);
+        return groupCenters.get(key)?.y ?? (h / 2);
+      });
+    }
+
+    // Color nodes by group when grouping is active
+    if (mode !== 'default') {
+      fNodes.forEach(node => {
+        const key = getGroupKey(node, mode);
+        node.color = groupColor(key);
+      });
+    }
+
+    const simulation = d3.forceSimulation<GraphNode>(fNodes)
+      .force('link', linkForce)
+      .force('charge', chargeForce)
+      .force('center', d3.forceCenter(w / 2, h / 2).strength(mode === 'default' ? 0.05 : 0.03))
+      .force('collision', collisionForce)
+      .force('groupX', groupXForce)
+      .force('groupY', groupYForce);
+
+    simulationRef.current = simulation;
+
+    // Zoom behavior — uses the preserved transform
+    // Filter: suppress zoom/drag when actively dragging a node
+    let isDraggingNode = false;
+    let isPanning = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let dragNode: GraphNode | null = null;
+
+    const zoom = d3.zoom<HTMLCanvasElement, unknown>()
+      .scaleExtent([0.1, 8])
+      .filter((event) => {
+        // Allow scroll-wheel zoom always
+        if (event.type === 'wheel') return true;
+        // Allow touch gestures
+        if (event.type === 'touchstart' || event.type === 'touchmove' || event.type === 'touchend') return true;
+        // Suppress when actively dragging a node
+        if (isDraggingNode) return false;
+        // For mousedown, check if we're clicking on a node
+        if (event.type === 'mousedown') {
+          const node = findNodeAt(event.clientX, event.clientY);
+          if (node) return false; // Let our handler deal with node clicks
+        }
+        return true;
+      })
+      .on('zoom', (event) => {
+        transformRef.current = event.transform;
+      })
+      .on('start', (event) => {
+        if (event.sourceEvent && event.sourceEvent.type === 'mousedown' && !isDraggingNode) {
+          isPanning = true;
+        }
+      })
+      .on('end', (event) => {
+        isPanning = false;
+      });
+
+    const d3Canvas = d3.select(canvas);
+    d3Canvas.call(zoom as any).on('dblclick.zoom', null);
+
+    // Apply the preserved/current transform immediately
+    d3Canvas.call(zoom.transform as any, currentTransform);
+
+    // ── Manual pointer handling (replaces d3.drag) ──
+    // This avoids the d3.zoom + d3.drag conflict on the same element.
+    // We track mousedown → mousemove → mouseup ourselves:
+    //   - If mousedown hits a node → node drag (suppress zoom)
+    //   - If mousedown misses → let d3.zoom handle pan/zoom
+    //   - On mouseup with <3px movement → it's a click (select/deselect)
+
+    const findNodeAt = (clientX: number, clientY: number): GraphNode | null => {
+      const [mx, my] = d3.pointer({ clientX, clientY } as any, canvas);
+      const t = transformRef.current;
+      const wx = (mx - t.x) / t.k, wy = (my - t.y) / t.k;
+      let closest: GraphNode | null = null;
+      let minDist = 25 / t.k;
+      for (const node of fNodes) {
+        if (node.x === undefined || node.y === undefined) continue;
+        const dx = node.x - wx, dy = node.y - wy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < minDist) { minDist = dist; closest = node; }
+      }
+      return closest;
+    };
+
+    const handleNodeClick = (node: GraphNode) => {
+      setSelectedNode(node);
+      fetchPersonDetail(node.id);
+    };
+
+    // Named handlers so we can clean them up
+    const onMousedown = (e: MouseEvent) => {
+      const node = findNodeAt(e.clientX, e.clientY);
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      dragNode = node;
+      if (node) {
+        isDraggingNode = true;
+        simulation.alphaTarget(0.3).restart();
+        node.fx = node.x;
+        node.fy = node.y;
+      }
+    };
+
+    const onMousemove = (e: MouseEvent) => {
+      if (isDraggingNode && dragNode) {
+        const t = transformRef.current;
+        const [mx, my] = d3.pointer(e);
+        dragNode.fx = (mx - t.x) / t.k;
+        dragNode.fy = (my - t.y) / t.k;
+        return;
+      }
+      const node = findNodeAt(e.clientX, e.clientY);
+      if (node?.id !== hoveredNodeRef.current?.id) {
+        hoveredNodeRef.current = node;
+        canvas.style.cursor = node ? 'pointer' : 'grab';
+      }
+    };
+
+    const onMouseup = (e: MouseEvent) => {
+      if (isDraggingNode && dragNode) {
+        const dx = e.clientX - dragStartX;
+        const dy = e.clientY - dragStartY;
+        if (dx * dx + dy * dy < 9) {
+          handleNodeClick(dragNode);
+        }
+        dragNode.fx = null;
+        dragNode.fy = null;
+        simulation.alphaTarget(0);
+        isDraggingNode = false;
+        dragNode = null;
+        return;
+      }
+      const dx = e.clientX - dragStartX;
+      const dy = e.clientY - dragStartY;
+      if (dx * dx + dy * dy < 9 && !isPanning) {
+        const node = findNodeAt(e.clientX, e.clientY);
+        if (node) {
+          handleNodeClick(node);
+        } else {
+          setSelectedNode(null);
+          setPersonDetail(null);
+          if (editMode) {
+            const t = transformRef.current;
+            const [mx, my] = d3.pointer(e);
+            setClickPosition({ x: (mx - t.x) / t.k, y: (my - t.y) / t.k });
+            setEditPanel('person');
+          }
+        }
+      }
+      dragNode = null;
+    };
+
+    const onMouseleave = () => {
+      hoveredNodeRef.current = null;
+      canvas.style.cursor = 'grab';
+    };
+
+    canvas.addEventListener('mousedown', onMousedown);
+    canvas.addEventListener('mouseleave', onMouseleave);
+
+    const draw = () => {
+      ctx.save();
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      const t = transformRef.current;
+      ctx.translate(t.x, t.y);
+      ctx.scale(t.k, t.k);
+
+      const hovered = hoveredNodeRef.current;
+      const connectedIds = new Set<string>();
+      if (hovered) {
+        connectedIds.add(hovered.id);
+        adjRef.current.get(hovered.id)?.forEach(id => connectedIds.add(id));
+      }
+
+      // Draw group cluster backgrounds when grouping
+      if (mode !== 'default' && t.k > 0.3) {
+        // Compute bounding circles for each group from actual node positions
+        const groupBounds = new Map<string, { cx: number; cy: number; r: number; count: number }>();
+        fNodes.forEach(n => {
+          if (n.x === undefined || n.y === undefined) return;
+          const key = getGroupKey(n, mode);
+          if (!groupBounds.has(key)) groupBounds.set(key, { cx: 0, cy: 0, r: 0, count: 0 });
+          const b = groupBounds.get(key)!;
+          b.cx += n.x;
+          b.cy += n.y;
+          b.count++;
+        });
+        groupBounds.forEach((b, key) => {
+          if (b.count === 0) return;
+          b.cx /= b.count;
+          b.cy /= b.count;
+          // Compute radius as max distance from centroid to any node + padding
+          let maxDist = 0;
+          fNodes.forEach(n => {
+            if (n.x === undefined || n.y === undefined) return;
+            if (getGroupKey(n, mode) !== key) return;
+            const dx = n.x - b.cx, dy = n.y - b.cy;
+            maxDist = Math.max(maxDist, Math.sqrt(dx * dx + dy * dy));
+          });
+          b.r = maxDist + 40;
+        });
+
+        groupBounds.forEach((b, name) => {
+          if (b.count === 0) return;
+          ctx.save();
+          ctx.globalAlpha = 0.08;
+          ctx.fillStyle = groupColor(name);
+          ctx.beginPath();
+          ctx.arc(b.cx, b.cy, b.r, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 0.15;
+          ctx.strokeStyle = groupColor(name);
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.restore();
+
+          // Label above the cluster
+          ctx.save();
+          ctx.globalAlpha = 0.7;
+          ctx.font = `600 ${Math.max(10, 14 / Math.min(t.k, 3))}px var(--font-sans)`;
+          ctx.textAlign = 'center';
+          ctx.fillStyle = groupColor(name);
+          const label = name.length > 18 ? name.slice(0, 18) + '…' : name;
+          ctx.fillText(label, b.cx, b.cy - b.r - 10);
+          ctx.restore();
+        });
+      }
+
+      fLinks.forEach(l => {
+        const source = fNodes.find(n => n.id === (typeof l.source === 'string' ? l.source : (l.source as any)?.id));
+        const target = fNodes.find(n => n.id === (typeof l.target === 'string' ? l.target : (l.target as any)?.id));
+        if (!source?.x || !source?.y || !target?.x || !target?.y) return;
+        const isConnected = hovered && (connectedIds.has(source.id) || connectedIds.has(target.id));
+        const isDimmed = hovered && !isConnected;
+        ctx.beginPath();
+        ctx.moveTo(source.x, source.y);
+        ctx.lineTo(target.x, target.y);
+        ctx.strokeStyle = isDimmed ? 'rgba(156,163,175,0.1)' : (isConnected ? getRelColor(l.rel_type) : `${getRelColor(l.rel_type)}66`);
+        ctx.lineWidth = isConnected ? 2.5 : Math.max(0.8, (l.strength || 0.5) * 2);
+        ctx.stroke();
+        if (t.k > 2 && isConnected && l.rel_type) {
+          ctx.font = '10px var(--font-sans)';
+          ctx.fillStyle = 'var(--color-text-secondary)';
+          ctx.textAlign = 'center';
+          ctx.fillText(l.rel_type, (source.x + target.x) / 2, (source.y + target.y) / 2 - 6);
+        }
+      });
+
+      fNodes.forEach(d => {
+        if (!d.x || !d.y) return;
+        const isDimmed = hovered && !connectedIds.has(d.id);
+        const radius = Math.max(5, Math.min(18, 5 + Math.sqrt((d.preference_count + d.fact_count + 1) * 1.5)));
+        ctx.beginPath();
+        ctx.arc(d.x, d.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = isDimmed ? 'rgba(156,163,175,0.1)' : d.color;
+        ctx.fill();
+        ctx.strokeStyle = isDimmed ? 'rgba(255,255,255,0.05)' : 'var(--color-canvas)';
+        ctx.lineWidth = hovered && d.id === hovered.id ? 3 : 1.5;
+        ctx.stroke();
+        if (t.k > 0.8 || (hovered && d.id === hovered.id)) {
+          ctx.font = `500 ${Math.max(10, 11 / Math.min(t.k, 2))}px var(--font-sans)`;
+          ctx.fillStyle = isDimmed ? 'rgba(107,114,128,0.15)' : 'var(--color-text-primary)';
+          ctx.textAlign = 'left';
+          ctx.fillText(d.name.length > 25 ? d.name.slice(0, 25) + '…' : d.name, d.x + radius + 4, d.y + 4);
+        }
+      });
+      ctx.restore();
+
+      // Minimap
+      const minimap = minimapRef.current;
+      if (minimap) {
+        const mCtx = minimap.getContext('2d');
+        if (mCtx) {
+          const mw = 160, mh = 120;
+          minimap.width = mw; minimap.height = mh;
+          mCtx.clearRect(0, 0, mw, mh);
+          mCtx.fillStyle = darkMode ? '#1F1F1F' : '#F8F9FA';
+          mCtx.fillRect(0, 0, mw, mh);
+          mCtx.strokeStyle = darkMode ? '#333333' : '#E5E7EB';
+          mCtx.strokeRect(0, 0, mw, mh);
+          if (fNodes.length > 0) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            fNodes.forEach(n => { if (n.x !== undefined && n.y !== undefined) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y); } });
+            const pad = 50; minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+            const sx = mw / (maxX - minX || 1), sy = mh / (maxY - minY || 1);
+            const ox = (mw - (maxX - minX) * sx) / 2, oy = (mh - (maxY - minY) * sy) / 2;
+            mCtx.fillStyle = darkMode ? '#4B5563' : '#9CA3AF';
+            fNodes.forEach(n => { if (n.x !== undefined && n.y !== undefined) mCtx.fillRect((n.x - minX) * sx + ox - 1, (n.y - minY) * sy + oy - 1, 2, 2); });
+            const vx = (-t.x / t.k - minX) * sx + ox, vy = (-t.y / t.k - minY) * sy + oy;
+            const vw = (w / t.k) * sx, vh = (h / t.k) * sy;
+            mCtx.strokeStyle = '#2563EB'; mCtx.lineWidth = 1.5; mCtx.strokeRect(vx, vy, vw, vh);
+            mCtx.fillStyle = 'rgba(37,99,235,0.05)'; mCtx.fillRect(vx, vy, vw, vh);
+          }
+        }
+      }
+    };
+
+    simulation.on('tick', () => { cancelAnimationFrame(animFrameRef.current); animFrameRef.current = requestAnimationFrame(draw); });
+
+    // Minimap click-to-navigate
+    minimapRef.current.onclick = (e) => {
+      const rect = minimapRef.current.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const nodes = simulation.nodes();
+      if (nodes.length === 0) return;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      nodes.forEach(n => { if (n.x !== undefined && n.y !== undefined) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y); } });
+      const pad = 50; minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+      const rangeX = maxX - minX || 1, rangeY = maxY - minY || 1;
+      const msx = 160 / rangeX, msy = 120 / rangeY;
+      const ox = (160 - rangeX * msx) / 2, oy = (120 - rangeY * msy) / 2;
+      const worldX = (mx - ox) / msx + minX;
+      const worldY = (my - oy) / msy + minY;
+      // Preserve current zoom level, just pan
+      const t = transformRef.current;
+      d3.select(canvas).call(zoom.transform as any, d3.zoomIdentity.translate(-worldX * t.k + w / 2, -worldY * t.k + h / 2).scale(t.k));
+    };
+
+    // FIX: Removed the simulation.on('end') that was locking the viewport.
+    // Instead, do a one-time gentle initial fit that respects the zoom behavior.
+    if (!initialFitDoneRef.current) {
+      initialFitDoneRef.current = true;
+      // Let the simulation settle, then do a gentle fit
+      const fitTimer = setTimeout(() => {
+        const nodes = simulation.nodes();
+        if (!nodes.length) return;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        nodes.forEach(n => { if (n.x !== undefined && n.y !== undefined) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y); } });
+        const bw = maxX - minX + 120, bh = maxY - minY + 120;
+        const scale = Math.min(w / bw, h / bh, 1.5) * 0.85;
+        const tx = w / 2 - scale * (minX + (maxX - minX) / 2);
+        const ty = h / 2 - scale * (minY + (maxY - minY) / 2);
+        // Only apply if user hasn't already interacted
+        d3.select(canvas).call(zoom.transform as any, d3.zoomIdentity.translate(tx, ty).scale(scale));
+      }, 100);
+      // Store timer so we can cancel on cleanup
+      (simulation as any)._fitTimer = fitTimer;
+    }
+
+    return () => {
+      simulation.stop();
+      if ((simulation as any)._fitTimer) clearTimeout((simulation as any)._fitTimer);
+      cancelAnimationFrame(animFrameRef.current);
+      canvas.removeEventListener('mousedown', onMousedown);
+      canvas.removeEventListener('mousemove', onMousemove);
+      canvas.removeEventListener('mouseup', onMouseup);
+      canvas.removeEventListener('mouseleave', onMouseleave);
+    };
+  }, [graphData, searchQuery, relTypeFilter, fetchPersonDetail, darkMode, editMode, groupMode]);
+
+  // Restart simulation when group mode changes
+  useEffect(() => {
+    initialFitDoneRef.current = false; // re-do initial fit for new grouping
+    const cleanup = setupCanvasGraph();
+    return cleanup;
+  }, [setupCanvasGraph]);
+
+  // FIX: Resize handler — only resize the drawing buffer, preserve transform and aspect ratio
+  useEffect(() => {
+    const handleResize = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      const w = rect.width;
+      const h = rect.height;
+      dimRef.current = { w, h, dpr };
+      // Resize the drawing buffer to match new CSS dimensions
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      // Update simulation center force without restarting
+      if (simulationRef.current) {
+        simulationRef.current.force('center', d3.forceCenter(w / 2, h / 2));
+        simulationRef.current.alpha(0.05).restart();
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const relTypes = graphData ? Array.from(new Set(graphData.links.map(l => l.rel_type).filter(Boolean))) : [];
+  const formatAge = (seconds: number) => {
+    if (seconds < 60) return `${seconds}s ago`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m ago`;
+  };
+
+  const handleRefresh = async () => {
+    try { await fetch('/api/refresh', { method: 'POST' }); addToast('success', 'Snapshot refreshed'); setTimeout(() => window.location.reload(), 500); }
+    catch { addToast('error', 'Refresh failed'); }
+  };
+
+  // ── Edit handlers ──
+  const handleCreatePerson = async (data: any) => {
+    const result = await apiPost('/api/person', data);
+    addToast('success', `${data.name} added`);
+    pushUndo({
+      type: 'create_person', description: `Created "${data.name}"`,
+      undo: async () => {
+        try { await apiPost('/api/delete-person', { id: result.id }); return true; } catch { return false; }
+      }
+    });
+    setEditPanel(null);
+    setClickPosition(null);
+    const res = await fetch('/api/graph');
+    const graph = await res.json();
+    setGraphData(graph);
+    graphDataRef.current = graph;
+  };
+
+  const handleEditPerson = async (data: any) => {
+    if (!selectedNode) return;
+    const result = await apiPost('/api/person', { ...data, id: selectedNode.id });
+    addToast('success', `${data.name} updated`);
+    pushUndo({
+      type: 'edit_person', description: `Edited "${selectedNode.name}"`,
+      undo: async () => {
+        try { await apiPost('/api/person', { ...selectedNode }); return true; } catch { return false; }
+      }
+    });
+    setEditPanel(null);
+    setSelectedNode(null);
+    setPersonDetail(null);
+    const res = await fetch('/api/graph');
+    const graph = await res.json();
+    setGraphData(graph);
+    graphDataRef.current = graph;
+  };
+
+  const handleCreateRelationship = async (data: any) => {
+    await apiPost('/api/relationship', data);
+    addToast('success', 'Relationship added');
+    pushUndo({
+      type: 'create_relationship', description: `Added ${data.rel_type} link`,
+      undo: async () => {
+        try { await apiPost('/api/delete-relationship', { source_id: data.source_id, target_id: data.target_id, rel_type: data.rel_type }); return true; } catch { return false; }
+      }
+    });
+    setEditPanel(null);
+    const res = await fetch('/api/graph');
+    const graph = await res.json();
+    setGraphData(graph);
+    graphDataRef.current = graph;
+  };
+
+  const handleAddPreference = async (data: any) => {
+    await apiPost('/api/preference', data);
+    addToast('success', 'Preference added');
+    pushUndo({
+      type: 'create_preference', description: `Added preference "${data.value}"`,
+      undo: async () => { try { await apiPost('/api/delete-preference', { person_id: data.person_id, value: data.value }); return true; } catch { return false; } }
+    });
+    setEditPanel(null);
+    if (selectedNode?.id === data.person_id) fetchPersonDetail(data.person_id);
+    const res = await fetch('/api/graph');
+    const graph = await res.json();
+    setGraphData(graph);
+    graphDataRef.current = graph;
+  };
+
+  const handleDeletePerson = async () => {
+    if (!selectedNode) return;
+    const name = selectedNode.name;
+    try {
+      await apiPost('/api/delete-person', { id: selectedNode.id });
+      addToast('success', `${name} deleted`);
+      pushUndo({
+        type: 'delete_person', description: `Deleted "${name}"`,
+        undo: async () => { try { await apiPost('/api/person', selectedNode); return true; } catch { return false; } }
+      });
+    } catch (e: any) { addToast('error', `Delete failed: ${e.message}`); }
+    setDeleteTarget(null);
+    setSelectedNode(null);
+    setPersonDetail(null);
+    const res = await fetch('/api/graph');
+    const graph = await res.json();
+    setGraphData(graph);
+    graphDataRef.current = graph;
+  };
+
+  const handleDeleteRelationship = async (link: GraphLink) => {
+    try {
+      await apiPost('/api/delete-relationship', { source_id: link.source, target_id: link.target, rel_type: link.rel_type });
+      addToast('success', 'Relationship removed');
+      pushUndo({
+        type: 'delete_relationship', description: `Removed ${link.rel_type}`,
+        undo: async () => { try { await apiPost('/api/relationship', { source_id: link.source, target_id: link.target, rel_type: link.rel_type, context: link.context }); return true; } catch { return false; } }
+      });
+    } catch (e: any) { addToast('error', `Delete failed: ${e.message}`); }
+    setDeleteTarget(null);
+    if (selectedNode) fetchPersonDetail(selectedNode.id);
+    const res = await fetch('/api/graph');
+    const graph = await res.json();
+    setGraphData(graph);
+    graphDataRef.current = graph;
+  };
+
+  const handleDeletePreference = async (pref: Record<string, any>, personId: string) => {
+    if (!pref.id && !pref.value) return;
+    try {
+      await apiPost('/api/delete-preference', { person_id: personId, preference_id: pref.id, value: pref.value });
+      addToast('success', 'Preference removed');
+    } catch (e: any) { addToast('error', `Delete failed: ${e.message}`); }
+    setDeleteTarget(null);
+    if (selectedNode) fetchPersonDetail(selectedNode.id);
+    const res = await fetch('/api/graph');
+    const graph = await res.json();
+    setGraphData(graph);
+    graphDataRef.current = graph;
+  };
+
+  if (loading) return (<div className="loading-screen"><div className="loading-spinner" /><p>Loading Weave graph…</p></div>);
+  if (error) return (<div className="loading-screen"><div className="error-message"><h2>Unable to load graph</h2><p>{error}</p><button onClick={() => window.location.reload()}>Retry</button></div></div>);
+
+  return (
+    <div className="app">
+      <Toaster toasts={toasts} dismiss={dismissToast} />
+
+      {/* ── Header ── */}
+      <header className="header">
+        <div className="header-left">
+          <h1 className="logo">Weave</h1>
+          <span className="header-divider" />
+          <span className="header-subtitle">Social Graph</span>
+        </div>
+        <div className="header-center">
+          <div className="search-box">
+            <svg className="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" /></svg>
+            <input type="text" placeholder="Search people, orgs, locations…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+          </div>
+          {relTypes.length > 0 && (
+            <select className="filter-select" value={relTypeFilter} onChange={e => setRelTypeFilter(e.target.value)}>
+              <option value="all">All relationships</option>
+              {relTypes.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+            </select>
+          )}
+          <select className="filter-select" value={groupMode} onChange={e => setGroupMode(e.target.value as GroupMode)} title="Group nodes by…">
+            <option value="default">Ungrouped</option>
+            <option value="company">Company</option>
+            <option value="education">Education / Role</option>
+            <option value="city">City</option>
+            <option value="tag">Tag</option>
+          </select>
+        </div>
+        <div className="header-right">
+          {undoStack.length > 0 && (
+            <button className="icon-btn" onClick={handleUndo} title={`Undo: ${undoStack[undoStack.length - 1].description} (Ctrl+Z)`}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 7v6h6" /><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" /></svg>
+            </button>
+          )}
+          <button className="icon-btn" onClick={handleRefresh} title={`Snapshot: ${formatAge(snapshotAge)}`}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 4v6h-6M1 20v-6h6" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+          </button>
+          <button className={`icon-btn ${editMode ? 'active' : ''}`} onClick={() => { setEditMode(!editMode); setEditPanel(null); }} title="Edit mode">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+          </button>
+          <button className="icon-btn" onClick={() => setShowStats(!showStats)} title="Toggle stats">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 20V10M12 20V4M6 20v-6" /></svg>
+          </button>
+          <button className="icon-btn" onClick={() => setDarkMode(!darkMode)} title="Toggle dark mode">
+            {darkMode ? (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="5" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg>
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" /></svg>
+            )}
+          </button>
+        </div>
+      </header>
+
+      <div className="main">
+        <div className="graph-container">
+          <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height: '100%' }} />
+          <div className="minimap-container"><canvas ref={minimapRef} width={160} height={120} /></div>
+
+          {editMode && (
+            <div className="edit-toolbar">
+              <button className={`edit-tool-btn ${editPanel === 'person' ? 'active' : ''}`} onClick={() => setEditPanel(editPanel === 'person' ? null : 'person')}>+ Person</button>
+              <button className={`edit-tool-btn ${editPanel === 'relationship' ? 'active' : ''}`} onClick={() => setEditPanel(editPanel === 'relationship' ? null : 'relationship')}>+ Relationship</button>
+              <button className={`edit-tool-btn ${editPanel === 'preference' ? 'active' : ''}`} onClick={() => setEditPanel(editPanel === 'preference' ? null : 'preference')}>+ Preference</button>
+              <span className="edit-toolbar-hint">Click empty space to add • Esc to close</span>
+            </div>
+          )}
+
+          {/* Edit forms */}
+          {editMode && editPanel === 'person' && (
+            <EditPersonForm
+              onClose={() => { setEditPanel(null); setClickPosition(null); }}
+              onSubmit={handleCreatePerson}
+            />
+          )}
+          {editMode && editPanel === 'relationship' && (
+            <EditRelationshipForm nodes={graphData?.nodes || []} onClose={() => setEditPanel(null)} onSubmit={handleCreateRelationship} />
+          )}
+          {editMode && editPanel === 'preference' && (
+            <EditPreferenceForm nodes={graphData?.nodes || []} onClose={() => setEditPanel(null)} onSubmit={handleAddPreference} />
+          )}
+
+          {/* Delete confirmation */}
+          {deleteTarget && (
+            <DeleteConfirm
+              message={deleteTarget.label}
+              onClose={() => setDeleteTarget(null)}
+              onConfirm={() => {
+                if (deleteTarget.type === 'person') return handleDeletePerson();
+                if (deleteTarget.type === 'relationship' && deleteTarget.link) return handleDeleteRelationship(deleteTarget.link);
+                if (deleteTarget.type === 'preference') return handleDeletePreference(deleteTarget.pref!, deleteTarget.person_id!);
+                return Promise.resolve();
+              }}
+            />
+          )}
+
+          {/* Stats */}
+          {showStats && graphData?.stats && (
+            <div className="stats-overlay">
+              {[
+                ['People', graphData.stats.total_nodes],
+                ['Connections', graphData.stats.total_links],
+                ['Preferences', graphData.stats.total_preferences],
+                ['Facts', graphData.stats.total_facts],
+              ].map(([label, value]) => (
+                <div key={label} className="stat-item">
+                  <span className="stat-value">{value}</span>
+                  <span className="stat-label">{label}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Legend */}
+          <div className="legend">
+            <div className="legend-title">Relationship types</div>
+            {Object.entries(REL_COLORS).map(([type, color]) => (
+              <div key={type} className="legend-item">
+                <span className="legend-dot" style={{ background: color }} />
+                <span>{type.replace(/_/g, ' ')}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* ── Detail Panel ── */}
+        {selectedNode && (
+          <aside className={`detail-panel ${personDetail ? 'open' : ''}`}>
+            <div className="detail-header">
+              <h2>{selectedNode.name}</h2>
+              <div className="detail-header-actions">
+                {editMode && (
+                  <>
+                    <button className="icon-btn" onClick={() => setEditPanel('edit-person')} title="Edit person">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                    </button>
+                    <button className="icon-btn danger" onClick={() => setDeleteTarget({ type: 'person', label: `Delete "${selectedNode.name}" and all their connections?` })} title="Delete person">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                    </button>
+                  </>
+                )}
+                <button className="close-btn" onClick={() => { setSelectedNode(null); setPersonDetail(null); setEditPanel(null); }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                </button>
+              </div>
+            </div>
+
+            {editMode && editPanel === 'edit-person' && personDetail ? (
+              <div className="detail-content">
+                <EditPersonForm
+                  initial={personDetail.person}
+                  onClose={() => setEditPanel(null)}
+                  onSubmit={async (data) => { await handleEditPerson(data); }}
+                />
+              </div>
+            ) : detailLoading ? (
+              <div className="detail-loading"><div className="loading-spinner small" /></div>
+            ) : personDetail ? (
+              <div className="detail-content">
+                <div className="detail-section">
+                  {selectedNode.org && <div className="detail-row"><span className="detail-label">Organization</span><span className="detail-value">{selectedNode.org}</span></div>}
+                  {selectedNode.occupation && <div className="detail-row"><span className="detail-label">Role</span><span className="detail-value">{selectedNode.occupation}</span></div>}
+                  {selectedNode.location_city && <div className="detail-row"><span className="detail-label">Location</span><span className="detail-value">{selectedNode.location_city}</span></div>}
+                  {selectedNode.email && <div className="detail-row"><span className="detail-label">Email</span><span className="detail-value mono">{selectedNode.email}</span></div>}
+                </div>
+
+                {(personDetail.connections_out.length > 0 || personDetail.connections_in.length > 0) && (
+                  <div className="detail-section">
+                    <h3>Connections ({personDetail.connections_out.length + personDetail.connections_in.length})</h3>
+                    {personDetail.connections_out.map((c, i) => {
+                      const link = graphData?.links.find(l => {
+                        const sid = typeof l.source === 'string' ? l.source : (l.source as any)?.id;
+                        const tid = typeof l.target === 'string' ? l.target : (l.target as any)?.id;
+                        return sid === selectedNode.id && tid === c.id && l.rel_type === c.rel_type;
+                      });
+                      return (
+                        <div key={`out-${i}`} className="connection-item">
+                          <span className="connection-arrow">→</span>
+                          <span className="connection-name">{c.name}</span>
+                          <span className="connection-type" style={{ color: getRelColor(c.rel_type) }}>{c.rel_type.replace(/_/g, ' ')}</span>
+                          {editMode && link && (
+                            <button className="icon-btn-sm danger" onClick={() => setDeleteTarget({ type: 'relationship', link, label: `Remove ${c.rel_type} connection to ${c.name}?` })} title="Delete">
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {personDetail.connections_in.map((c, i) => {
+                      const link = graphData?.links.find(l => {
+                        const sid = typeof l.source === 'string' ? l.source : (l.source as any)?.id;
+                        const tid = typeof l.target === 'string' ? l.target : (l.target as any)?.id;
+                        return sid === c.id && tid === selectedNode.id && l.rel_type === c.rel_type;
+                      });
+                      return (
+                        <div key={`in-${i}`} className="connection-item">
+                          <span className="connection-arrow">←</span>
+                          <span className="connection-name">{c.name}</span>
+                          <span className="connection-type" style={{ color: getRelColor(c.rel_type) }}>{c.rel_type.replace(/_/g, ' ')}</span>
+                          {editMode && link && (
+                            <button className="icon-btn-sm danger" onClick={() => setDeleteTarget({ type: 'relationship', link, label: `Remove ${c.rel_type} connection from ${c.name}?` })} title="Delete">
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {personDetail.preferences.length > 0 && (
+                  <div className="detail-section">
+                    <div className="detail-section-header">
+                      <h3>Preferences ({personDetail.preferences.length})</h3>
+                      {editMode && (
+                        <button className="icon-btn-sm" onClick={() => setEditPanel('add-pref')} title="Add preference">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14" /></svg>
+                        </button>
+                      )}
+                    </div>
+                    {personDetail.preferences.map((p, i) => (
+                      <div key={i} className="preference-item">
+                        <div className="pref-main">
+                          <span className="preference-value">{p.value}</span>
+                          {p.category && <span className="preference-category">{p.category}</span>}
+                        </div>
+                        {editMode && (
+                          <button className="icon-btn-sm danger" onClick={() => setDeleteTarget({ type: 'preference', pref: p, person_id: selectedNode.id, label: `Remove preference "${p.value}"?` })} title="Delete">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {personDetail.preferences.length === 0 && editMode && (
+                  <div className="detail-section">
+                    <button className="btn-secondary" onClick={() => setEditPanel('add-pref')}>+ Add Preference</button>
+                  </div>
+                )}
+
+                {editMode && editPanel === 'add-pref' && (
+                  <EditPreferenceForm
+                    nodes={graphData?.nodes || []}
+                    initial={{ person_id: selectedNode.id }}
+                    onClose={() => setEditPanel(null)}
+                    onSubmit={async (data) => { await handleAddPreference(data); }}
+                  />
+                )}
+
+                {personDetail.facts.length > 0 && (
+                  <div className="detail-section">
+                    <h3>Facts ({personDetail.facts.length})</h3>
+                    {personDetail.facts.slice(0, 10).map((f, i) => (
+                      <div key={i} className="fact-item">
+                        <span className="fact-predicate">{f.predicate}</span>
+                        <span className="fact-value">{f.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </aside>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export { ErrorBoundary };
+export default App;

@@ -1,6 +1,6 @@
 # Database Maintenance
 
-Systematic inspection, cleaning, and data quality validation for the Weave LadybugDB database.
+Systematic inspection, cleaning, and data quality validation for the Weave SQLite database.
 
 ## When to Use
 
@@ -8,164 +8,155 @@ Systematic inspection, cleaning, and data quality validation for the Weave Ladyb
 - When experiencing sync failures due to data quality issues
 - Periodic database health maintenance (monthly)
 - After importing large amounts of data containing inconsistencies
-- After the overnight enrichment scraper has run (known corruption bug)
+- After the overnight enrichment pipeline has run
 
-## LadybugDB Query Patterns
+## Quick Health Check
 
-LadybugDB has important differences from Neo4j Cypher:
-
-### Return Format
-- **`RETURN p`** (whole node): each row is a **dict** with properties + `_ID` and `_LABEL`
-- **`RETURN p.id, p.name, count(p)`** (column selectors): each row is a **list** (NOT dict)
-- Always check with `r.get_column_names()` before accessing columns
-
-### Row Iteration for Large Tables
-```python
-def safe_get_all(conn, query):
-    r = conn.execute(query)
-    cols = r.get_column_names()
-    rows = []
-    while True:
-        try:
-            row = r.get_next()
-            rows.append(row)
-        except Exception as e:
-            if "No more tuples" in str(e):
-                break
-            if "utf-8" in str(e).lower():
-                continue  # skip corrupt row
-            raise
-    r.close()
-    return cols, rows
+```bash
+cd <hermes-root>/commons/db/ocas-weave && sqlite3 weave.sqlite "
+SELECT 'persons' as tbl, COUNT(*) FROM persons
+UNION ALL SELECT 'edges', COUNT(*) FROM edges
+UNION ALL SELECT 'facts', COUNT(*) FROM facts
+UNION ALL SELECT 'preferences', COUNT(*) FROM preferences;"
 ```
-
-### Database Locking Issues
-- `fuser -v /path/to/weave.lbug` shows which PID holds the lock
-- After a killed process (SIGTERM/SIGKILL), orphan processes may hold the lock
-- **Kill orphan**: `kill -9 <PID>` — repeat until `fuser` returns empty
-- **Stale WAL**: `rm -f <hermes-root>/commons/db/ocas-weave/weave.lbug.wal` after killed processes
 
 ## Maintenance Operations
 
-### 1. Database Inspection
-```python
-from real_ladybug import Database, Connection
+All operations below use `weave_sqlite.WeaveDB`. Import: `from weave_sqlite import WeaveDB`
 
-db = Database("<hermes-root>/commons/db/ocas-weave/weave.lbug", read_only=True)
-conn = Connection(db)
+### 1. Database Inspection
+
+```python
+weave = WeaveDB()
 
 # Basic counts
-for label, query in [
-    ("person_count", "MATCH (p:Person) RETURN count(p)"),
-    ("preference_count", "MATCH (p:Preference) RETURN count(p)"),
-    ("fact_count", "MATCH (f:Fact) RETURN count(f)"),
-    ("knows_count", "MATCH ()-[r:Knows]->() RETURN count(r)"),
-]:
-    cols, rows = safe_get_all(conn, query)
-    print(f"{label}: {rows[0][0] if rows else 0}")
+for table in ["persons", "edges", "facts", "preferences"]:
+    rows = weave.execute(f"SELECT COUNT(*) as cnt FROM {table}")
+    print(f"{table}: {rows[0]['cnt']}")
 
 # Missing fields
 for field in ["email", "phone", "org", "location_city"]:
-    cols, rows = safe_get_all(conn, 
-        f"MATCH (p:Person) WHERE p.{field} IS NULL OR p.{field} = '' RETURN count(p)")
-    print(f"Missing {field}: {rows[0][0] if rows else '?'}")
+    rows = weave.execute(
+        f"SELECT COUNT(*) as cnt FROM persons WHERE {field} IS NULL OR {field} = ''"
+    )
+    print(f"Missing {field}: {rows[0]['cnt']}")
 ```
 
 ### 2. Data Corruption Detection
 
-The enrichment scraper has a known bug where it extracts substrings incorrectly:
+Common enrichment scraper issues:
 
-#### Truncated Occupations
 ```python
-# Check for occupations missing first characters
-cols, rows = safe_get_all(conn, 
-    "MATCH (p:Person) WHERE p.occupation IS NOT NULL AND p.occupation <> '' "
-    "RETURN p.id, p.name, p.occupation, p.org")
-
 import re
+
+# Check for truncated occupations (missing first characters)
+rows = weave.execute(
+    "SELECT id, name, occupation, org FROM persons WHERE occupation IS NOT NULL AND occupation != ''"
+)
 for r in rows:
-    occ = r[2]
+    occ = r["occupation"]
     if occ and (re.match(r'^[a-z]', occ) or len(occ) < 5 or len(occ) > 200):
-        print(f"  SUSPICIOUS: {r[1]} occ='{occ[:80]}...'")
-```
+        print(f"  SUSPICIOUS: {r['name']} occ='{occ[:80]}...'")
 
-#### Fragment Organizations
-```python
-# Single-word org fragments that aren't real companies
-suspicious_orgs = {
-    "Senior", "North", "Spring", "Work", "Product", "Finance",
-    "Serial", "Serving", "Greater", "Atlantic", "General", "Director"
-}
-
-cols, rows = safe_get_all(conn, 
-    "MATCH (p:Person) WHERE p.org IS NOT NULL AND p.org <> '' "
-    "RETURN p.id, p.name, p.org, p.occupation")
-
+# Check for fragment organizations
+suspicious_orgs = {"Senior", "North", "Spring", "Work", "Product", "Finance",
+                   "Serial", "Serving", "Greater", "Atlantic", "General", "Director"}
+rows = weave.execute("SELECT id, name, org, occupation FROM persons WHERE org IS NOT NULL AND org != ''")
 for r in rows:
-    if r[2] and r[2] in suspicious_orgs:
-        print(f"  FRAGMENT ORG: {r[1]} org='{r[2]}' occ='{r[3]}'")
+    if r["org"] in suspicious_orgs:
+        print(f"  FRAGMENT ORG: {r['name']} org='{r['org']}' occ='{r['occupation']}'")
+
+# Check for job titles in city field
+rows = weave.execute("SELECT id, name, location_city FROM persons WHERE location_city IS NOT NULL AND location_city != ''")
+for r in rows:
+    if re.search(r'(Executive|Manager|Director|Engineer|VP|President|Chief)', r["location_city"]):
+        print(f"  TITLE IN CITY: {r['name']} city='{r['location_city']}'")
 ```
 
 ### 3. Duplicate Detection
 
-#### By Email (most reliable)
 ```python
-cols, rows = safe_get_all(conn, """
-    MATCH (p:Person) WHERE p.email IS NOT NULL AND p.email <> ''
-    WITH p.email AS email, count(p) AS cnt,
-         collect(p.id) AS ids, collect(p.name) AS names,
-         collect(p.org) AS orgs
-    WHERE cnt > 1
-    RETURN email, cnt, ids, names, orgs
+# By email (most reliable)
+rows = weave.execute("""
+    SELECT email, COUNT(*) as cnt, GROUP_CONCAT(name, ', ') as names
+    FROM persons WHERE email IS NOT NULL AND email != ''
+    GROUP BY email HAVING cnt > 1
 """)
-print(f"Duplicate emails: {len(rows)}")
+for r in rows:
+    print(f"  DUPE EMAIL: {r['email']} ({r['cnt']}) - {r['names']}")
+
+# By name (fuzzy — review manually)
+rows = weave.execute("""
+    SELECT name, COUNT(*) as cnt, GROUP_CONCAT(id, ', ') as ids
+    FROM persons WHERE name IS NOT NULL AND name != ''
+    GROUP BY name HAVING cnt > 1
+""")
+for r in rows:
+    print(f"  DUPE NAME: {r['name']} ({r['cnt']}) - ids: {r['ids']}")
 ```
 
 ### 4. Orphan Detection
 
-Use OPTIONAL MATCH instead of NOT EXISTS (unsupported in LadybugDB):
-
 ```python
-# Orphan Preferences
-cols, rows = safe_get_all(conn, """
-    MATCH (pref:Preference)
-    OPTIONAL MATCH (person:Person)-[:HasPreference]->(pref)
-    WITH pref, person WHERE person.id IS NULL
-    RETURN pref.id, pref.category, pref.value
+# Orphan preferences (no HasPreference edge)
+rows = weave.execute("""
+    SELECT p.id, p.category, p.value FROM preferences p
+    LEFT JOIN edges e ON e.target_id = p.id AND e.rel_type = 'HasPreference'
+    WHERE e.id IS NULL
 """)
 print(f"Orphan preferences: {len(rows)}")
 
-# Orphan Facts
-cols, rows = safe_get_all(conn, """
-    MATCH (f:Fact)
-    OPTIONAL MATCH (person:Person)-[:HasFact]->(f)
-    WITH f, person WHERE person.id IS NULL
-    RETURN f.id, f.predicate, f.value
+# Orphan facts (no HasFact edge)
+rows = weave.execute("""
+    SELECT f.id, f.predicate, f.value FROM facts f
+    LEFT JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact'
+    WHERE e.id IS NULL
 """)
 print(f"Orphan facts: {len(rows)}")
+
+# Persons with no relationships at all
+rows = weave.execute("""
+    SELECT p.id, p.name FROM persons p
+    LEFT JOIN edges e ON e.source_id = p.id
+    WHERE e.id IS NULL
+""")
+print(f"Isolated persons: {len(rows)}")
 ```
 
 ### 5. Data Cleanup
 
 ```python
-def execute(conn, query, params=None):
-    r = conn.execute(query, params or {})
-    try:
-        while True:
-            r.get_next()
-    except Exception:
-        pass
-    r.close()
-
 # Clear corrupted fields
-execute(conn, "MATCH (p:Person {id: $id}) SET p.occupation = ''", {"id": person_id})
-execute(conn, "MATCH (p:Person {id: $id}) SET p.org = ''", {"id": person_id})
+weave.execute_write("UPDATE persons SET occupation = '' WHERE id = :id", {"id": person_id})
+weave.execute_write("UPDATE persons SET org = '' WHERE id = :id", {"id": person_id})
+weave.execute_write("UPDATE persons SET location_city = '' WHERE id = :id", {"id": person_id})
 
 # Delete null-name isolated records (check no relationships first)
-execute(conn, "MATCH (p:Person {id: $id}) DETACH DELETE p", {"id": person_id})
+rows = weave.execute("""
+    SELECT p.id FROM persons p
+    LEFT JOIN edges e ON e.source_id = p.id OR e.target_id = p.id
+    WHERE (p.name IS NULL OR p.name = '') AND e.id IS NULL
+""")
+for r in rows:
+    weave.execute_write("DELETE FROM persons WHERE id = :id", {"id": r["id"]})
 
-# Delete orphan preferences/facts
-execute(conn, "MATCH (p:Preference {id: $id}) DELETE p", {"id": pref_id})
+# Delete orphan preferences
+weave.execute("""
+    DELETE FROM preferences WHERE id IN (
+        SELECT p.id FROM preferences p
+        LEFT JOIN edges e ON e.target_id = p.id AND e.rel_type = 'HasPreference'
+        WHERE e.id IS NULL
+    )
+""")
+
+# Delete orphan facts
+weave.execute("""
+    DELETE FROM facts WHERE id IN (
+        SELECT f.id FROM facts f
+        LEFT JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact'
+        WHERE e.id IS NULL
+    )
+""")
 ```
 
 ## Known Corruption Patterns
@@ -181,31 +172,39 @@ execute(conn, "MATCH (p:Preference {id: $id}) DELETE p", {"id": pref_id})
 ## Validation After Cleanup
 
 ```python
-# Verify cleanup success
-for check, query in [
-    ("Null names", "MATCH (p:Person) WHERE p.name IS NULL RETURN count(p)"),
-    ("Orphan prefs", """
-        MATCH (pref:Preference)
-        OPTIONAL MATCH (person:Person)-[:HasPreference]->(pref)
-        WITH pref, person WHERE person.id IS NULL
-        RETURN count(pref)
-    """),
-    ("Orphan facts", """
-        MATCH (f:Fact)
-        OPTIONAL MATCH (person:Person)-[:HasFact]->(f)
-        WITH f, person WHERE person.id IS NULL
-        RETURN count(f)
-    """),
-]:
-    cols, rows = safe_get_all(conn, query)
-    print(f"{check}: {rows[0][0] if rows else 0}")
+checks = {
+    "Null names": "SELECT COUNT(*) FROM persons WHERE name IS NULL OR name = ''",
+    "Orphan prefs": """
+        SELECT COUNT(*) FROM preferences p
+        LEFT JOIN edges e ON e.target_id = p.id AND e.rel_type = 'HasPreference'
+        WHERE e.id IS NULL
+    """,
+    "Orphan facts": """
+        SELECT COUNT(*) FROM facts f
+        LEFT JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact'
+        WHERE e.id IS NULL
+    """,
+}
+for label, query in checks.items():
+    rows = weave.execute(query)
+    print(f"{label}: {rows[0][0] if rows else 0}")
 ```
 
 ## Safe Deletion Criteria
 
 Only delete Person nodes when:
 - Name is null AND
-- No relationships exist (Knows, HasPreference, HasFact)
+- No relationships exist (Knows, HasPreference, HasFact — check both source and target)
 - Verified via relationship check
 
 Only delete orphan Preferences/Facts when confirmed disconnected from any Person.
+
+## Backup
+
+```bash
+# Simple file copy (WAL mode — copy all three files)
+cp <hermes-root>/commons/db/ocas-weave/weave.sqlite{,-wal,-shm} /backup/path/
+
+# Or use SQLite's backup API
+sqlite3 <hermes-root>/commons/db/ocas-weave/weave.sqlite ".backup /backup/path/weave.sqlite"
+```

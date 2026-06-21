@@ -1,6 +1,5 @@
 # Constraints
 
-- Never use SQL.
 - Never report a write as successful before read-back confirms it.
 - Never parse or modify `.lbug`, `.wal`, `.shadow`, or `.tmp` files directly.
 - Never write to Chronicle or any other skill's database.

@@ -1,270 +1,185 @@
 # Schemas
 
-LadybugDB DDL for `weave.lbug`. The database auto-initializes on first command via `_ensure_init()`. Run `weave.init` only for diagnostics or repair.
+SQLite schema for `weave.sqlite`. The database auto-initializes on first command via `WeaveDB.__init__()`. WAL mode allows concurrent reads + single write.
 
-Check existing tables before running DDL: `CALL show_tables() RETURN *`
+## Python usage
+
+```python
+import sys
+sys.path.insert(0, "{skill_root}/scripts")
+from weave_sqlite import WeaveDB
+
+weave = WeaveDB()  # auto-inits schema, WAL mode
+
+# Query
+rows = weave.execute("SELECT * FROM persons WHERE name LIKE :name", {"name": "%Smith%"})
+for row in rows:
+    print(row["name"], row["org"])
+
+# Upsert person (gap-fill: only fills empty fields)
+weave.upsert_person({
+    "id": "uuid-or-auto",
+    "name": "Jane Doe",
+    "email": "jane@example.com",
+    "source_type": "direct",
+    "source_ref": "user-stated",
+    "confidence": 1.0,
+})
+
+# Direct write
+weave.execute_write(
+    "INSERT INTO persons (id, name, source_type, source_ref, confidence, record_time) VALUES (:id, :name, :st, :sr, :c, :now)",
+    {"id": "...", "name": "...", "st": "imported", "sr": "", "c": 0.8, "now": "2026-..."},
+)
+
+# Read-back verification (required after every write)
+result = weave.execute("SELECT id, name FROM persons WHERE id = :id", {"id": "..."})
+assert result[0]["name"] == "Jane Doe"
+```
 
 ## DDL
 
-```cypher
-CREATE NODE TABLE IF NOT EXISTS Person (
-  id STRING PRIMARY KEY,
-  name STRING,
-  name_given STRING,
-  name_family STRING,
-  email STRING,
-  phone STRING,
-  location_city STRING,
-  location_country STRING,
-  occupation STRING,
-  org STRING,
-  notes STRING,
-  google_resource_name STRING,
-  clay_id STRING,
-  source_type STRING,
-  source_ref STRING,
-  confidence DOUBLE,
-  event_time STRING,
-  record_time STRING,
-  valid_from STRING,
-  valid_until STRING
+```sql
+CREATE TABLE IF NOT EXISTS persons (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, name_given TEXT, name_family TEXT,
+    email TEXT, phone TEXT, location_city TEXT, location_country TEXT,
+    occupation TEXT, org TEXT, google_resource_name TEXT, clay_id TEXT,
+    source_type TEXT NOT NULL DEFAULT 'imported', source_ref TEXT NOT NULL DEFAULT '',
+    confidence REAL NOT NULL DEFAULT 0.8, event_time TEXT,
+    record_time TEXT NOT NULL DEFAULT (datetime('now')),
+    valid_from TEXT, valid_until TEXT
 );
-
-CREATE NODE TABLE IF NOT EXISTS Preference (
-  id STRING PRIMARY KEY,
-  category STRING,
-  value STRING,
-  valence STRING,
-  confidence DOUBLE,
-  source_type STRING,
-  source_ref STRING,
-  record_time STRING
+CREATE TABLE IF NOT EXISTS preferences (
+    id TEXT PRIMARY KEY, category TEXT NOT NULL, value TEXT NOT NULL,
+    valence TEXT NOT NULL DEFAULT 'like', confidence REAL NOT NULL DEFAULT 0.8,
+    source_type TEXT NOT NULL DEFAULT 'imported', source_ref TEXT NOT NULL DEFAULT '',
+    record_time TEXT NOT NULL DEFAULT (datetime('now'))
 );
-
-CREATE NODE TABLE IF NOT EXISTS Fact (
-  id STRING PRIMARY KEY,
-  predicate STRING,
-  value STRING,
-  confidence DOUBLE,
-  source_type STRING,
-  source_ref STRING,
-  record_time STRING
+CREATE TABLE IF NOT EXISTS facts (
+    id TEXT PRIMARY KEY, predicate TEXT NOT NULL, value TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0.8, source_type TEXT NOT NULL DEFAULT 'imported',
+    source_ref TEXT NOT NULL DEFAULT '', record_time TEXT NOT NULL DEFAULT (datetime('now'))
 );
-
-CREATE REL TABLE IF NOT EXISTS Knows (
-  FROM Person TO Person,
-  rel_type STRING,
-  strength DOUBLE,
-  since STRING,
-  context STRING,
-  source_ref STRING,
-  confidence DOUBLE,
-  record_time STRING
+CREATE TABLE IF NOT EXISTS edges (
+    id TEXT PRIMARY KEY, source_id TEXT NOT NULL, target_id TEXT NOT NULL,
+    rel_type TEXT NOT NULL DEFAULT 'Knows', strength REAL, since TEXT, context TEXT,
+    source_ref TEXT, confidence REAL,
+    record_time TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (source_id) REFERENCES persons(id)
 );
-
-CREATE REL TABLE IF NOT EXISTS HasPreference (
-  FROM Person TO Preference
-);
-
-CREATE REL TABLE IF NOT EXISTS HasFact (
-  FROM Person TO Fact
-);
+CREATE INDEX IF NOT EXISTS idx_persons_name ON persons(name);
+CREATE INDEX IF NOT EXISTS idx_persons_email ON persons(email);
+CREATE INDEX IF NOT EXISTS idx_persons_grn ON persons(google_resource_name);
+CREATE INDEX IF NOT EXISTS idx_persons_clay ON persons(clay_id);
+CREATE INDEX IF NOT EXISTS idx_persons_record_time ON persons(record_time);
+CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
+CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
+CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(rel_type);
+CREATE INDEX IF NOT EXISTS idx_facts_predicate ON facts(predicate);
+CREATE INDEX IF NOT EXISTS idx_preferences_category ON preferences(category);
 ```
 
-Note: LadybugDB does not support `CREATE INDEX IF NOT EXISTS` syntax. Primary keys are indexed automatically. No secondary indexes are needed at Weave's expected scale (thousands of nodes).
-
-## Python auto-init implementation
-
-```python
-import real_ladybug as lb
-from pathlib import Path
-import uuid, json
-from datetime import datetime, timezone
-
-COMMONS_ROOT = Path("{agent_root}/commons").expanduser()
-DB_PATH = COMMONS_ROOT / "db/ocas-weave/weave.lbug"
-STAGING = COMMONS_ROOT / "db/ocas-weave/staging"
-JOURNALS = COMMONS_ROOT / "journals/ocas-weave"
-CONFIG_PATH = COMMONS_ROOT / "db/ocas-weave/config.json"
-
-def _open_db(read_only=False):
-    """Open connection. Auto-inits schema and directories on first use."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STAGING.mkdir(parents=True, exist_ok=True)
-    JOURNALS.mkdir(parents=True, exist_ok=True)
-    _ensure_config()
-    db = lb.Database(str(DB_PATH), read_only=read_only)
-    conn = lb.Connection(db)
-    if not read_only:
-        _ensure_init(conn)
-    return db, conn
-
-def _ensure_config():
-    if not CONFIG_PATH.exists():
-        now = datetime.now(timezone.utc).isoformat()
-        config = {
-            "skill_id": "ocas-weave",
-            "skill_version": "2.0.0",
-            "config_version": "1",
-            "created_at": now,
-            "updated_at": now,
-            "writeback": {"google_contacts": False, "clay": False},
-            "last_sync": {"google_contacts": None, "clay": None},
-            "retention": {"days": 0}
-        }
-        CONFIG_PATH.write_text(json.dumps(config, indent=2))
-
-def _ensure_init(conn):
-    """Run DDL only if schema is missing. Idempotent."""
-    tables = {row[0] for row in conn.execute("CALL show_tables() RETURN *")}
-    if "Person" not in tables:
-        _run_ddl(conn)
-
-def _run_ddl(conn):
-    statements = [
-        """CREATE NODE TABLE Person (
-            id STRING PRIMARY KEY, name STRING, name_given STRING,
-            name_family STRING, email STRING, phone STRING,
-            location_city STRING, location_country STRING,
-            occupation STRING, org STRING, notes STRING,
-            google_resource_name STRING, clay_id STRING,
-            source_type STRING, source_ref STRING, confidence DOUBLE,
-            event_time STRING, record_time STRING,
-            valid_from STRING, valid_until STRING
-        )""",
-        """CREATE NODE TABLE Preference (
-            id STRING PRIMARY KEY, category STRING, value STRING,
-            valence STRING, confidence DOUBLE, source_type STRING,
-            source_ref STRING, record_time STRING
-        )""",
-        """CREATE NODE TABLE Fact (
-            id STRING PRIMARY KEY, predicate STRING, value STRING,
-            confidence DOUBLE, source_type STRING, source_ref STRING,
-            record_time STRING
-        )""",
-        """CREATE REL TABLE Knows (
-            FROM Person TO Person,
-            rel_type STRING, strength DOUBLE, since STRING,
-            context STRING, source_ref STRING, confidence DOUBLE,
-            record_time STRING
-        )""",
-        "CREATE REL TABLE HasPreference (FROM Person TO Preference)",
-        "CREATE REL TABLE HasFact (FROM Person TO Fact)",
-    ]
-    for stmt in statements:
-        conn.execute(stmt)
-```
-
-## CLI usage
-
-```bash
-# Open interactive shell
-lbug {agent_root}/commons/db/ocas-weave/weave.lbug
-
-# Check schema
-lbug {agent_root}/commons/db/ocas-weave/weave.lbug -c ":schema"
-
-# Non-interactive query
-echo "MATCH (p:Person) RETURN count(p)" | lbug {agent_root}/commons/db/ocas-weave/weave.lbug
-
-# Read-only shell (safe alongside running process)
-lbug {agent_root}/commons/db/ocas-weave/weave.lbug --readonly
-
-# Show tables
-lbug {agent_root}/commons/db/ocas-weave/weave.lbug -c "CALL show_tables() RETURN *"
-
-# Show warnings after COPY FROM
-lbug {agent_root}/commons/db/ocas-weave/weave.lbug -c "CALL show_warnings() RETURN *"
-```
-
-Lock error means another process (CLI, another Python session) has the file open READ_WRITE. Check running processes, close them, retry.
+**Note on `edges.target_id` FK**: `target_id` is a polymorphic reference — it can point to `persons.id` (for `Knows` edges), `facts.id` (for `HasFact` edges), or `preferences.id` (for `HasPreference` edges). Only `source_id` has a FK constraint to `persons(id)`. Do NOT add `FOREIGN KEY (target_id) REFERENCES persons(id)` — it breaks HasFact and HasPreference edges.
 
 ## Person fields
 
-id -- STRING, PRIMARY KEY. UUID. Merge key. Never merge on name alone.
-name -- STRING, required. Canonical display name.
-name_given / name_family -- STRING. First / last name.
-email -- STRING. Primary email.
-phone -- STRING. E.164 preferred.
-location_city / location_country -- STRING. ISO 3166-1 alpha-2 for country.
-occupation / org / notes -- STRING.
-google_resource_name -- STRING. Google Contacts foreign key.
-clay_id -- STRING. Clay foreign key.
-source_type -- STRING, required. direct / inferred / imported / user-stated.
-source_ref -- STRING, required. Provenance reference.
-confidence -- DOUBLE, required. 0.0–1.0.
-event_time -- STRING. ISO 8601. When the real-world observation occurred.
-record_time -- STRING, required. ISO 8601. When Weave wrote this record.
-valid_from / valid_until -- STRING. ISO 8601. Validity window. valid_until null = currently valid.
-
-Single upsert pattern:
-```cypher
-MERGE (p:Person {id: $id})
-SET p.name = $name,
-    p.source_type = $source_type,
-    p.source_ref = $source_ref,
-    p.confidence = $confidence,
-    p.record_time = $record_time
-```
-
-Read-back (required after every MERGE or CREATE):
-```cypher
-MATCH (p:Person {id: $id}) RETURN p.id, p.name
-```
+| Field | Type | Notes |
+|-------|------|-------|
+| id | TEXT PK | UUID. Merge key. Never merge on name alone. |
+| name | TEXT NOT NULL | Canonical display name. |
+| name_given / name_family | TEXT | First / last name. |
+| email | TEXT | Primary email. |
+| phone | TEXT | E.164 preferred. |
+| location_city / location_country | TEXT | ISO 3166-1 alpha-2 for country. |
+| occupation / org | TEXT | Job title / organization. |
+| google_resource_name | TEXT | Google Contacts foreign key. |
+| clay_id | TEXT | Clay foreign key. |
+| source_type | TEXT NOT NULL | direct / inferred / imported / user-stated. |
+| source_ref | TEXT NOT NULL | Provenance reference. |
+| confidence | REAL NOT NULL | 0.0–1.0. |
+| event_time | TEXT | ISO 8601. When the real-world observation occurred. |
+| record_time | TEXT NOT NULL | ISO 8601. When Weave wrote this record. |
+| valid_from / valid_until | TEXT | ISO 8601. Validity window. |
 
 ## Preference fields
 
-id -- STRING, PRIMARY KEY. UUID per record.
-category -- STRING. food / gift / travel / interest / constraint / other.
-value -- STRING. Free text.
-valence -- STRING. like / dislike / constraint.
-confidence -- DOUBLE.
-source_type / source_ref / record_time -- STRING, required.
+| Field | Type | Notes |
+|-------|------|-------|
+| id | TEXT PK | UUID per record. |
+| category | TEXT NOT NULL | food / gift / travel / interest / constraint / other. |
+| value | TEXT NOT NULL | Free text. |
+| valence | TEXT NOT NULL | like / dislike / constraint. |
+| confidence | REAL | 0.0–1.0. |
+| source_type / source_ref / record_time | TEXT NOT NULL | Provenance. |
 
-Each preference is a distinct CREATE — never MERGE on value.
+Each preference is a distinct INSERT — never MERGE on value.
 
-## Knows fields
+## Edge fields
 
-rel_type -- STRING. Ontology standard: knows / friend_of / colleague_of / family_of / introduced_by / spouse_of / reports_to / acquaintance_of.
-strength -- DOUBLE. 0.0–1.0.
-since -- STRING. ISO 8601 date.
-context -- STRING.
-source_ref / record_time -- STRING, required.
-confidence -- DOUBLE.
+| Field | Type | Notes |
+|-------|------|-------|
+| id | TEXT PK | UUID. |
+| source_id | TEXT NOT NULL FK→persons | Always a person. |
+| target_id | TEXT NOT NULL | Polymorphic: person, fact, or preference depending on rel_type. |
+| rel_type | TEXT NOT NULL | Knows / HasFact / HasPreference. |
+| strength | REAL | 0.0–1.0. Knows only. |
+| since | TEXT | ISO 8601 date. |
+| context | TEXT | e.g. 'spouse' for Knows edges. |
+| source_ref / record_time | TEXT | Provenance. |
+| confidence | REAL | 0.0–1.0. |
 
-## CSV import column map
+## Fact fields
 
-For `COPY Person FROM 'file.csv' (header=true)`. Column names must match field names exactly.
+| Field | Type | Notes |
+|-------|------|-------|
+| id | TEXT PK | UUID. |
+| predicate | TEXT NOT NULL | Field name: org, occupation, location_city, email, phone, etc. |
+| value | TEXT NOT NULL | The extracted value. |
+| confidence | REAL | 0.0–1.0. |
+| source_type / source_ref / record_time | TEXT NOT NULL | Provenance. |
 
-Required: id (generate UUID if absent), name, source_type (default: imported), source_ref (default: filename), confidence (default: 0.8), record_time (default: now)
-Optional: name_given, name_family, email, phone, location_city, location_country, occupation, org, notes, google_resource_name, clay_id, event_time, valid_from, valid_until
+## Upsert pattern
+
+```sql
+-- Insert or gap-fill (only fills empty/null fields)
+INSERT INTO persons (id, name, source_type, source_ref, confidence, record_time)
+VALUES (:id, :name, :source_type, :source_ref, :confidence, :now)
+ON CONFLICT(id) DO UPDATE SET
+    name = COALESCE(NULLIF(name, ''), excluded.name),
+    email = COALESCE(NULLIF(email, ''), excluded.email),
+    phone = COALESCE(NULLIF(phone, ''), excluded.phone),
+    org = COALESCE(NULLIF(org, ''), excluded.org),
+    record_time = excluded.record_time;
+```
+
+## Write pattern (always read back)
+
+```sql
+-- Write
+UPDATE persons SET org = :org, record_time = :now WHERE id = :id;
+
+-- Read-back (required)
+SELECT id, name, org FROM persons WHERE id = :id;
+```
 
 ## Storage Layout
 
 ```
-{agent_root}/commons/data/ocas-weave/
-  intents.jsonl        — pending intents queued for retry (degraded mode)
-  evidence.jsonl       — evidence records for every sync/write run
-  sync_log.jsonl       — sync activity log
-
 {agent_root}/commons/db/ocas-weave/
-  weave.lbug          — LadybugDB database (auto-created on first use)
-  config.json         — connector and sync configuration
-  staging/            — temporary import/export files
+  weave.sqlite       — SQLite database (auto-created on first use)
+  weave.sqlite-wal   — WAL file (auto-created)
+  weave.sqlite-shm   — Shared memory file (auto-created)
+  config.json        — connector and sync configuration
+  staging/           — temporary import/export files
+  snapshots/         — contact sync snapshots
 
-{agent_root}/commons/journals/ocas-weave/
-  YYYY-MM-DD/
-    {run_id}.json     — one journal per run
+{agent_root}/commons/data/ocas-weave/
+  config.json        — connector and sync configuration
 ```
 
+## CSV import column map
 
-## Default Configuration
+For bulk import via `weave.bulk_import("persons", rows)`. Column names match field names exactly.
 
-```cypher
-CALL show_tables() RETURN *;
-MATCH (p:Person) RETURN count(p) AS people;
-MATCH ()-[r:Knows]->() RETURN count(r) AS relationships;
-MATCH (pref:Preference) RETURN count(pref) AS preferences;
-CALL show_warnings() RETURN *;
-```
-
+Required: id (auto-generated UUID if absent), name, source_type (default: imported), source_ref (default: filename), confidence (default: 0.8), record_time (default: now)
+Optional: name_given, name_family, email, phone, location_city, location_country, occupation, org, google_resource_name, clay_id, event_time, valid_from, valid_until

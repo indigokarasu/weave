@@ -5,136 +5,92 @@ Queries Person nodes, Fact nodes (birthday, linkedin, website, instagram),
 and Knows spouse relationships. Builds complete PATCH bodies covering all 13
 mapped fields. Never syncs partial data.
 """
-
-import json, urllib.request, urllib.parse, time, sys, os
+import json
+import urllib.request
+import urllib.parse
+import time
+import sys
+import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
-DB = str(AGENT_ROOT / "commons/db/ocas-weave/weave.lbug")
-TOKEN_PATH = "[Google OAuth credentials]google-workspace-user.json"
+SQLITE_DB = AGENT_ROOT / "commons/db/ocas-weave/weave.sqlite"
 LOG_DIR = str(AGENT_ROOT / "data/weave-google-sync")
 os.makedirs(LOG_DIR, exist_ok=True)
 
-def get_token():
-    with open(TOKEN_PATH) as f:
-        td = json.load(f)
-    expiry = td.get("expiry", "")
-    if isinstance(expiry, str):
-        try:
-            exp = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
-            if exp < datetime.now(timezone.utc):
-                refresh_token(td)
-        except:
-            pass
-    return td["token"]
+# Shared Google API helpers
+sys.path.insert(0, str(Path(__file__).parent))
+from google_api import get_access_token, PEOPLE_API_BASE
 
-def refresh_token(td):
-    resp = urllib.request.urlopen(urllib.request.Request(
-        "https://oauth2.googleapis.com/token",
-        data=urllib.parse.urlencode({
-            "client_id": td["client_id"],
-            "client_secret": td["client_secret"],
-            "refresh_token": td["refresh_token"],
-            "grant_type": "refresh_token"
-        }).encode()))
-    new = json.loads(resp.read())
-    td["token"] = new["access_token"]
-    td["expiry"] = (datetime.now(timezone.utc) + timedelta(seconds=new["expires_in"])).isoformat()
-    with open(TOKEN_PATH, "w") as f:
-        json.dump(td, f, indent=2)
-    print(f"  Token refreshed, expires: {td['expiry']}")
 
 def api_request(method, path, data=None, token=None):
-    url = f"https://people.googleapis.com/v1/{path}"
+    url = f"{PEOPLE_API_BASE}/{path}"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     body = json.dumps(data).encode() if data else None
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     return urllib.request.urlopen(req)
 
-def safe_get_next(r):
-    """Iterate rows handling LadybugDB quirks (no StopIteration, corrupt UTF-8)."""
-    while True:
-        try:
-            yield r.get_next()
-        except Exception as e:
-            if "No more tuples" in str(e):
-                return
-            if "utf-8" in str(e):
-                continue
-            raise
 
 def get_people():
-    from real_ladybug import Database, Connection
-    db = Database(DB, read_only=True)
-    conn = Connection(db)
+    """Fetch people, facts, and spouse relationships from SQLite."""
+    from weave_sqlite import WeaveDB
+    weave = WeaveDB(SQLITE_DB)
 
-    # All Person fields mapped to Google
-    r = conn.execute("""
-        MATCH (p:Person)
-        WHERE p.google_resource_name IS NOT NULL AND p.google_resource_name <> ''
-        RETURN p.id, p.name, p.name_given, p.name_family, p.email, p.phone,
-               p.org, p.occupation, p.location_city, p.location_country,
-               p.google_resource_name
+    rows = weave.execute("""
+        SELECT id, name, name_given, name_family, email, phone,
+               org, occupation, location_city, location_country,
+               google_resource_name
+        FROM persons
+        WHERE google_resource_name IS NOT NULL AND google_resource_name != ''
     """)
-    cols = list(r.get_column_names())
     persons = []
-    for row in safe_get_next(r):
+    for row in rows:
         person = {}
-        for ci, cn in enumerate(cols):
-            field = cn.split(".", 1)[1] if "." in cn else cn
-            val = row[ci]
+        for key in row:
+            val = row[key]
             if val and str(val).strip():
-                person[field] = str(val).strip()
+                person[key] = str(val).strip()
         if person.get("google_resource_name"):
             persons.append(person)
 
     # Facts: birthday, linkedin, website, instagram
-    r2 = conn.execute("""
-        MATCH (p:Person)-[:HasFact]->(f:Fact)
-        WHERE p.google_resource_name IS NOT NULL AND p.google_resource_name <> ''
-        RETURN p.google_resource_name AS rn, f.type AS ftype, f.value AS fvalue
+    fact_rows = weave.execute("""
+        SELECT p.google_resource_name AS rn, f.predicate AS ftype, f.value AS fvalue
+        FROM facts f
+        JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact'
+        JOIN persons p ON p.id = e.source_id
+        WHERE p.google_resource_name IS NOT NULL AND p.google_resource_name != ''
     """)
-    cols2 = list(r2.get_column_names())
-    rn_idx = cols2.index("p.google_resource_name")
-    type_idx = cols2.index("f.type")
-    val_idx = cols2.index("f.value")
-
     facts_by_rn = {}
-    for row in safe_get_next(r2):
-        rn = str(row[rn_idx]).strip()
-        ft = str(row[type_idx]).strip()
-        fv = str(row[val_idx]).strip()
+    for row in fact_rows:
+        rn = row["rn"]
         if rn not in facts_by_rn:
             facts_by_rn[rn] = {}
-        facts_by_rn[rn][ft] = fv
+        facts_by_rn[rn][row["ftype"]] = row["fvalue"]
 
     # Spouse relationships
-    r3 = conn.execute("""
-        MATCH (p:Person)-[:Knows {rel_type: 'spouse'}]->(s:Person)
-        WHERE p.google_resource_name IS NOT NULL AND p.google_resource_name <> ''
-        RETURN p.google_resource_name AS rn, s.name AS spouse_name
+    spouse_rows = weave.execute("""
+        SELECT p.google_resource_name AS rn, s.name AS spouse_name
+        FROM edges e
+        JOIN persons p ON p.id = e.source_id
+        JOIN persons s ON s.id = e.target_id
+        WHERE e.rel_type = 'Knows'
+          AND e.context = 'spouse'
+          AND p.google_resource_name IS NOT NULL AND p.google_resource_name != ''
     """)
-    cols3 = list(r3.get_column_names())
-    rn3_idx = cols3.index("p.google_resource_name")
-    sn_idx = cols3.index("s.name")
-
     spouses_by_rn = {}
-    for row in safe_get_next(r3):
-        rn = str(row[rn3_idx]).strip()
-        sn = str(row[sn_idx]).strip()
-        spouses_by_rn[rn] = sn
+    for row in spouse_rows:
+        spouses_by_rn[row["rn"]] = row["spouse_name"]
 
-    conn.close()
-    db.close()
     return persons, facts_by_rn, spouses_by_rn
+
 
 def build_update_body(person, facts, spouse):
     """Build PATCH body with ALL mapped fields from references/google-field-map.md."""
     body = {}
     update_fields = []
 
-    # names: displayName, givenName, familyName
     has_name = False
     names = {}
     if person.get("name_given"):
@@ -150,17 +106,14 @@ def build_update_body(person, facts, spouse):
         body["names"] = [names]
         update_fields.append("names")
 
-    # emailAddresses
     if person.get("email"):
         body["emailAddresses"] = [{"value": person["email"], "type": "home"}]
         update_fields.append("emailAddresses")
 
-    # phoneNumbers
     if person.get("phone"):
         body["phoneNumbers"] = [{"value": person["phone"], "type": "mobile"}]
         update_fields.append("phoneNumbers")
 
-    # organizations: name + title
     has_org = False
     org = {}
     if person.get("org"):
@@ -173,7 +126,6 @@ def build_update_body(person, facts, spouse):
         body["organizations"] = [org]
         update_fields.append("organizations")
 
-    # addresses: city + countryCode
     has_addr = False
     addr = {}
     if person.get("location_city"):
@@ -186,7 +138,6 @@ def build_update_body(person, facts, spouse):
         body["addresses"] = [addr]
         update_fields.append("addresses")
 
-    # birthdays (from Fact)
     if facts.get("birthday"):
         bval = facts["birthday"]
         try:
@@ -195,10 +146,9 @@ def build_update_body(person, facts, spouse):
                 m, d = int(parts[0]), int(parts[1])
                 body["birthdays"] = [{"date": {"month": m, "day": d}}]
                 update_fields.append("birthdays")
-        except:
+        except Exception:
             pass
 
-    # urls: LinkedIn, Website, Instagram (from Facts)
     urls = []
     if facts.get("linkedin"):
         urls.append({"value": facts["linkedin"], "type": "LinkedIn"})
@@ -210,22 +160,20 @@ def build_update_body(person, facts, spouse):
         body["urls"] = urls
         update_fields.append("urls")
 
-    # relations: spouse (plain text name, NOT resource ID)
     if spouse:
         body["relations"] = [{"person": spouse, "type": "spouse"}]
         update_fields.append("relations")
 
     return body, update_fields
 
+
 def main():
-    token = get_token()
-    print(f"Fetching Weave data...")
+    token = get_access_token()
+    print("Fetching Weave data...")
     persons, facts_by_rn, spouses_by_rn = get_people()
     print(f"Found {len(persons)} contacts with Google resource names")
 
-    pushed = 0
-    failed = 0
-    skipped = 0
+    pushed = failed = skipped = 0
     errors = []
 
     for i, p in enumerate(persons):
@@ -260,18 +208,18 @@ def main():
                     pushed += 1
                 except Exception as e2:
                     failed += 1
-                    errors.append(f"{p.get('name','?')}: {e2}")
+                    errors.append(f"{p.get('name', '?')}: {e2}")
             else:
                 failed += 1
-                errors.append(f"{p.get('name','?')}: HTTP {e.code}: {err_body[:200]}")
+                errors.append(f"{p.get('name', '?')}: HTTP {e.code}: {err_body[:200]}")
         except Exception as e:
             failed += 1
-            errors.append(f"{p.get('name','?')}: {str(e)[:200]}")
+            errors.append(f"{p.get('name', '?')}: {str(e)[:200]}")
 
         time.sleep(0.7)
 
     print(f"\n{'='*50}")
-    print(f"FULL SYNC COMPLETE")
+    print("FULL SYNC COMPLETE")
     print(f"  Pushed: {pushed}")
     print(f"  Skipped (no fields): {skipped}")
     print(f"  Failed: {failed}")
@@ -280,19 +228,16 @@ def main():
         for e in errors[:10]:
             print(f"    {e}")
 
-    # Log
     log = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "total": len(persons),
-        "pushed": pushed,
-        "skipped": skipped,
-        "failed": failed,
-        "errors": errors[:20]
+        "total": len(persons), "pushed": pushed,
+        "skipped": skipped, "failed": failed, "errors": errors[:20],
     }
     with open(os.path.join(LOG_DIR, f"sync_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"), "w") as f:
         json.dump(log, f, indent=2)
 
     return pushed, failed
+
 
 if __name__ == "__main__":
     main()

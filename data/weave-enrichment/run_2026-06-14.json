@@ -1,0 +1,29 @@
+{
+  "pipeline": "overnight_enrichment",
+  "run_time": "2026-06-14T09:05:00Z",
+  "status": "completed",
+  "steps": {
+    "inbound_sync": {"status": "ok", "contacts_fetched": 965, "upserted": 942, "skipped": 23},
+    "searxng_health": {"status": "degraded", "unresponsive_engines": 6, "results_per_query": 10},
+    "enrichment": {
+      "contacts_processed": 54,
+      "contacts_enriched": 54,
+      "pipeline_stages": ["scout_web_search", "sift_linkedin_fetch", "sherlock_crossref", "write_weave"]
+    },
+    "outbound_sync": {"status": "ok", "pushed": 586, "failed": 0, "created": 1}
+  },
+  "stats": {
+    "total_people": 1037,
+    "with_org": 949,
+    "with_occupation": 885,
+    "with_both": 866,
+    "still_needing_enrichment": 109,
+    "enriched_this_run": 54
+  },
+  "issues": {
+    "ladybugdb_cypher_bug": "MATCH (p:Person {id: $pid}) sometimes matches wrong nodes when combined with SET. Workaround: use MATCH (p:Person {name: $name}) for write queries.",
+    "searxng_degraded": "6/11 engines unresponsive (brave, duckduckgo, karmasearch, aol). Google engine still functional.",
+    "linkedin_auth_walled": "LinkedIn profiles require direct HTTP fetch (browser UA). Jina Reader blocked. web_extract cannot fetch auth-walled pages.",
+    "return_after_set": "LadybugDB doesn't return rows from SET queries via get_next(). Workaround: use separate read query to verify."
+  }
+}

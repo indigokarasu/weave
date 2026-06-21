@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Standalone Weave Enrichability Recalculation Script
+Standalone Weave Enrichability Recalculation Script — SQLite backend.
 
 Iterates all Person nodes in the Weave graph and recalculates
 enrichability_score for each one. Run nightly at 1am via cron.
@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
-DB_PATH = AGENT_ROOT / "commons/db/ocas-weave/weave.lbug"
+SQLITE_DB = AGENT_ROOT / "commons/db/ocas-weave/weave.sqlite"
 
 DRY_RUN = "--dry-run" in sys.argv
 VERBOSE = "--verbose" in sys.argv
@@ -30,56 +30,57 @@ def log(msg):
 
 
 def open_db():
-    import real_ladybug as lb
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = lb.Database(str(DB_PATH), read_only=False)
-    conn = lb.Connection(db)
-    return db, conn
+    sys.path.insert(0, str(Path(__file__).parent))
+    from weave_sqlite import WeaveDB
+    return WeaveDB(SQLITE_DB)
 
 
-def recalculate_enrichability(conn, contact_id):
+def recalculate_enrichability(weave, contact_id):
     """Recalculate enrichability_score for a contact."""
-    r = conn.execute("""
-        MATCH (p:Person {id: $id})
-        RETURN p.name_given AS name_given, p.name_family AS name_family,
-               p.email AS email, p.phone AS phone, p.org AS org,
-               p.occupation AS occupation, p.location_city AS location_city,
-               p.source_type AS source_type
+    rows = weave.execute("""
+        SELECT name_given, name_family, email, phone, org,
+               occupation, location_city, source_type
+        FROM persons WHERE id = :id
     """, {"id": contact_id})
-    rows = r.get_all()
-    r.close()
     if not rows:
         return None
     c = rows[0]
-    has = {f: bool(c[i]) for i, f in enumerate(
-        ["name_given", "name_family", "email", "phone", "org", "occupation", "location_city"])}
+    has = {
+        "name_given": bool(c["name_given"]),
+        "name_family": bool(c["name_family"]),
+        "email": bool(c["email"]),
+        "phone": bool(c["phone"]),
+        "org": bool(c["org"]),
+        "occupation": bool(c["occupation"]),
+        "location_city": bool(c["location_city"]),
+    }
     seed_count = sum(has.values())
 
     if seed_count < 2:
         new_score = 0.0
     else:
         gaps = []
-        if not c[2]: gaps.append("email")
-        if not c[3]: gaps.append("phone")
-        if not c[4]: gaps.append("org")
-        if not c[5]: gaps.append("occupation")
-        if not c[6]: gaps.append("location_city")
+        if not c["email"]: gaps.append("email")
+        if not c["phone"]: gaps.append("phone")
+        if not c["org"]: gaps.append("org")
+        if not c["occupation"]: gaps.append("occupation")
+        if not c["location_city"]: gaps.append("location_city")
 
         if not gaps:
             new_score = 0.0
         else:
             enriched_fields = []
             try:
-                r2 = conn.execute("""
-                    MATCH (p:Person {id: $id})-[:HasFact]->(f:Fact {source_type: 'web_enrichment'})
-                    WHERE f.predicate IN ['org','occupation','location_city','email','phone','location_country']
-                    RETURN collect(DISTINCT f.predicate) AS ef
+                er = weave.execute("""
+                    SELECT f.predicate
+                    FROM facts f
+                    JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact'
+                    WHERE e.source_id = :id
+                      AND f.source_type = 'web_enrichment'
+                      AND f.predicate IN ('org','occupation','location_city','email','phone','location_country')
                 """, {"id": contact_id})
-                er = r2.get_all()
-                r2.close()
-                if er:
-                    enriched_fields = er[0][0] or []
-            except:
+                enriched_fields = [r["predicate"] for r in er]
+            except Exception:
                 pass
 
             remaining_gaps = [g for g in gaps if g not in enriched_fields]
@@ -90,17 +91,15 @@ def recalculate_enrichability(conn, contact_id):
             else:
                 n_conn = 0
                 try:
-                    r3 = conn.execute(
-                        "MATCH (p:Person {id: $id})-[r:Knows]-() RETURN count(r) AS cnt",
-                        {"id": contact_id}
-                    )
-                    cr = r3.get_all()
-                    r3.close()
-                    n_conn = cr[0][0] if cr else 0
-                except:
+                    cr = weave.execute("""
+                        SELECT count(*) as cnt FROM edges
+                        WHERE source_id = :id AND rel_type = 'Knows'
+                    """, {"id": contact_id})
+                    n_conn = cr[0]["cnt"] if cr else 0
+                except Exception:
                     pass
 
-                st = c[7] or ""
+                st = c["source_type"] or ""
                 src_rel = {
                     "imported": 1.0, "scout_research": 0.8, "direct": 0.9,
                     "user-stated": 0.3, "web_enrichment": 0.4, "inferred": 0.5,
@@ -108,15 +107,15 @@ def recalculate_enrichability(conn, contact_id):
 
                 dqs = 5.0
                 try:
-                    r4 = conn.execute(
-                        "MATCH (p:Person {id: $id})-[:HasFact]->(f:Fact {predicate: 'data_quality_score'}) RETURN f.value",
-                        {"id": contact_id}
-                    )
-                    dr = r4.get_all()
-                    r4.close()
+                    dr = weave.execute("""
+                        SELECT f.value
+                        FROM facts f
+                        JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact'
+                        WHERE e.source_id = :id AND f.predicate = 'data_quality_score'
+                    """, {"id": contact_id})
                     if dr:
-                        dqs = float(dr[0][0])
-                except:
+                        dqs = float(dr[0]["value"])
+                except Exception:
                     pass
 
                 gap_score = min(len(remaining_gaps) * 1.33, 4.0)
@@ -136,46 +135,46 @@ def recalculate_enrichability(conn, contact_id):
 
     # Delete old score, write new
     try:
-        conn.execute(
-            "MATCH (p:Person {id: $id})-[:HasFact]->(f:Fact {predicate: 'enrichability_score'}) DETACH DELETE f",
-            {"id": contact_id}
-        )
-    except:
+        weave.execute_write("""
+            DELETE FROM facts WHERE id IN (
+                SELECT f.id FROM facts f
+                JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact'
+                WHERE e.source_id = :id AND f.predicate = 'enrichability_score'
+            )
+        """, {"id": contact_id})
+    except Exception:
         pass
 
     now = datetime.now(timezone.utc).isoformat()
     fid = str(uuid.uuid4())
-    conn.execute("""
-        MATCH (p:Person {id: $pid})
-        CREATE (f:Fact {id: $fid, predicate: 'enrichability_score', value: $val,
-            source_type: 'system', source_ref: 'enrichability-recalc',
-            confidence: 1.0, record_time: $rt})
-        CREATE (p)-[:HasFact]->(f)
-    """, {"pid": contact_id, "fid": fid, "val": str(new_score), "rt": now})
+    weave.execute_write("""
+        INSERT INTO facts (id, predicate, value, source_type, source_ref, confidence, record_time)
+        VALUES (:fid, 'enrichability_score', :val, 'system', 'enrichability-recalc', 1.0, :rt)
+    """, {"fid": fid, "val": str(new_score), "rt": now})
+    weave.execute_write("""
+        INSERT OR IGNORE INTO edges (id, source_id, target_id, rel_type, record_time)
+        VALUES (:eid, :pid, :fid, 'HasFact', :rt)
+    """, {"eid": str(uuid.uuid4()), "pid": contact_id, "fid": fid, "rt": now})
 
     return new_score
 
 
-def get_all_persons(conn):
-    """Get all Person node IDs."""
-    r = conn.execute("MATCH (p:Person) RETURN p.id AS id, p.name AS name ORDER BY p.name")
-    rows = r.get_all()
-    r.close()
-    return rows
+def get_all_persons(weave):
+    """Get all Person IDs."""
+    return weave.execute("SELECT id, name FROM persons ORDER BY name")
 
 
 def main():
     mode = "DRY RUN" if DRY_RUN else "LIVE"
     log(f"Enrichability Recalculation starting [{mode}]")
-    log(f"Database: {DB_PATH}")
+    log(f"Database: {SQLITE_DB}")
 
-    if not DB_PATH.exists():
-        log("ERROR: Database file does not exist. Run weave.init first.")
+    if not SQLITE_DB.exists():
+        log("ERROR: Database file does not exist. Run migration first.")
         sys.exit(1)
 
-    db, conn = open_db()
-
-    persons = get_all_persons(conn)
+    weave = open_db()
+    persons = get_all_persons(weave)
     total = len(persons)
     log(f"Found {total} Person nodes")
 
@@ -185,21 +184,20 @@ def main():
     score_distribution = {}
 
     for i, row in enumerate(persons):
-        contact_id = row[0]
-        name = row[1] or "(unnamed)"
+        contact_id = row["id"]
+        name = row["name"] or "(unnamed)"
 
         try:
             old_score = None
-            r = conn.execute(
-                "MATCH (p:Person {id: $id})-[:HasFact]->(f:Fact {predicate: 'enrichability_score'}) RETURN f.value",
-                {"id": contact_id}
-            )
-            old_rows = r.get_all()
-            r.close()
+            old_rows = weave.execute("""
+                SELECT f.value FROM facts f
+                JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact'
+                WHERE e.source_id = :id AND f.predicate = 'enrichability_score'
+            """, {"id": contact_id})
             if old_rows:
-                old_score = float(old_rows[0][0])
+                old_score = float(old_rows[0]["value"])
 
-            new_score = recalculate_enrichability(conn, contact_id)
+            new_score = recalculate_enrichability(weave, contact_id)
 
             if new_score is None:
                 skipped += 1
@@ -216,8 +214,6 @@ def main():
         except Exception as e:
             log(f"  [{i+1}/{total}] {name}: ERROR — {e}")
             errors += 1
-
-    conn.close()
 
     log("=" * 60)
     log(f"RECALCULATION COMPLETE [{mode}]")

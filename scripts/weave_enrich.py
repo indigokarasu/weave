@@ -315,28 +315,19 @@ def sift_extract_from_pages(name, search_results, max_pages=3):
 
 
 def enrich_weave_contact(contact_id, enrichment_data, confidence=0.7, person_name=""):
-    """
-    Write enrichment data back to Weave as Fact nodes with full provenance.
-    Shared by quick_enrich and overnight_enrichment.
-    Returns True if any fields were written.
-    """
-    import uuid as _uuid
-
+    """Write enrichment to the People DB (Choice-2). Accepts a people.db opaque id OR a
+    legacy Weave id (resolved via external_refs). Shared by quick_enrich and overnight_enrichment."""
     sys.path.insert(0, str(Path(__file__).parent))
-    from weave_sqlite import WeaveDB
-
-    weave = WeaveDB()
-
+    from people_db import PeopleDB
+    from datetime import datetime as _dt, timezone as _tz
+    db = PeopleDB()
     if not enrichment_data:
         return False
-
-    written = 0
-    rows = weave.execute("SELECT id FROM persons WHERE id = ?", (contact_id,))
-    if not rows:
+    pid = contact_id if db.get(contact_id) else db.resolve(external=("weave", contact_id))
+    if not pid:
         return False
-
-    record_time = datetime.now(timezone.utc).isoformat()
-
+    _today = _dt.now(_tz.utc).strftime("%Y%m%d")
+    written = 0
     for key, value in enrichment_data.items():
         if key.startswith("_") or key.endswith("_source"):
             continue
@@ -344,22 +335,10 @@ def enrich_weave_contact(contact_id, enrichment_data, confidence=0.7, person_nam
             continue
         if not validate_field(key, value, person_name):
             continue
-
-        fact_id = str(_uuid.uuid4())
-        source_url = enrichment_data.get(f"{key}_source", "")
-        ref = source_url or f"enrichment_{datetime.now(timezone.utc).strftime('%Y%m%d')}"
-
-        weave.execute("""
-            INSERT OR REPLACE INTO facts (id, predicate, value, confidence, source_type, source_ref, record_time)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (fact_id, key, value, confidence, "web_enrichment", ref, record_time))
-
-        edge_id = str(_uuid.uuid4())
-        weave.execute_write("""
-            INSERT OR IGNORE INTO edges (id, source_id, target_id, rel_type, confidence, record_time)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (edge_id, contact_id, fact_id, "HasFact", confidence, record_time))
-
+        ref = enrichment_data.get(f"{key}_source", "") or ("enrichment_" + _today)
+        if key in ("email", "phone"):
+            db.add_identifier(pid, key, value)
+        else:
+            db.set_attribute(pid, key, value, confidence=confidence, source_type="web_enrichment", source_ref=ref)
         written += 1
-
     return written > 0

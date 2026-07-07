@@ -12,7 +12,7 @@
 
 - **NEVER silently fall back to an alternate account's token**: When the primary user's token is expired, revoked, or empty, halt immediately. Log `auth_failure` in evidence.
 - **TOKEN_PATH must match the correct user account**: `google_api.py` uses `google-workspace-user.json`. All Weave scripts import from `google_api.py` — never duplicate auth logic.
-- **`contacts.readonly` vs `contacts` scope**: Inbound sync works with readonly, but outbound fails with HTTP 403. Check scopes before running outbound.
+- **`contacts.readonly` vs `contacts` scope**: Inbound sync works with readonly, but outbound fails with HTTP 403. Check scopes before running outbound. **Differential diagnosis**: a 403 (Forbidden) on outbound = the token is VALID but lacks the write `scope` (`https://www.googleapis.com/auth/contacts`); a 401 `invalid_grant` = the refresh token is revoked/expired (token INVALID). Different root cause, different fix — a 403 means add the write scope / re-consent with Contacts scope, NOT "owner must re-authorize because the token was revoked." Don't conflate them. Both runs of the 2026-07-07 enrichment hit persistent 403 on all 588 outbound contacts while inbound (readonly) succeeded.
 - **Skip outbound entirely when scope is insufficient**: Don't fetch etags for 582+ contacts when all batch PATCH calls will 403.
 - **Outbound checkpoint file accumulates stale entries after failures**: Clear checkpoint if previous run pushed 0.
 - **Cron `HOME` env var breaks `Path.home()`**: Override `HOME=/root` when running sync scripts.

@@ -162,6 +162,21 @@ UPDATE persons SET org = :org, record_time = :now WHERE id = :id;
 SELECT id, name, org FROM persons WHERE id = :id;
 ```
 
+## Enrichment write pattern (agent-driven)
+
+For writing enrichment data gathered from web searches, the `facts` table has **no `person_id` column**. Linkage is via `edges`:
+
+```python
+# 1. UPDATE persons (gap-fill)
+db.execute_write("UPDATE persons SET occupation = COALESCE(?, occupation), org = COALESCE(?, org) WHERE id = ?", (occ, org, pid))
+# 2. INSERT fact
+db.execute_write("INSERT INTO facts (id, predicate, value, source_type, source_ref, confidence, record_time) VALUES (?, 'enrichment', ?, ?, ?, ?, ?)", (fact_id, payload_json, st, sr, conf, now))
+# 3. INSERT edge
+db.execute_write("INSERT INTO edges (id, source_id, target_id, rel_type, source_ref, confidence, record_time) VALUES (?, ?, ?, 'HasFact', ?, ?, ?)", (edge_id, pid, fact_id, sr, conf, now))
+```
+
+See `references/enrichment-write-pattern.md` for the full pattern with batch processing.
+
 ## Storage Layout
 
 ```

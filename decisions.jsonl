@@ -1,0 +1,5 @@
+{"action": "skip_unresolvable", "contact_id": "fbdc1f32-ff9a-5059-be77-567afcf4a12e", "name": "Ben Brown", "reason": "common_name_no_disambiguator", "attempted": ["gap_scan"], "timestamp": "2026-07-12T09:06:54.520053+00:00"}
+{"action": "skip_unresolvable", "contact_id": "ec3295a2-9001-42db-bb83-97bd774e105c", "name": "Phil Baker", "reason": "common_name_no_disambiguator", "attempted": ["gap_scan"], "timestamp": "2026-07-12T09:06:54.520053+00:00"}
+{"action": "skip_unresolvable", "contact_id": "c133c44c-fe7e-5a36-a260-80673f2e0451", "name": "DJI", "reason": "non_person_entry", "attempted": ["gap_scan"], "timestamp": "2026-07-12T09:06:54.520053+00:00"}
+{"action": "skip_unresolvable", "contact_id": "381da50e-03d9-5aee-830f-8de5431d1107", "name": "PayPal", "reason": "non_person_entry", "attempted": ["gap_scan"], "timestamp": "2026-07-12T09:06:54.520053+00:00"}
+{"action": "skip_unresolvable", "contact_id": "09a5a035-7722-51f8-b483-a08bfdb6b59b", "name": "Venmo", "reason": "non_person_entry", "attempted": ["gap_scan"], "timestamp": "2026-07-12T09:06:54.520053+00:00"}

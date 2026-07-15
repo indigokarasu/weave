@@ -32,7 +32,7 @@ def get_access_token():
             if datetime.now(timezone.utc) >= exp_dt and token_data.get('refresh_token'):
                 data = urllib.parse.urlencode({
                     'client_id': token_data.get('client_id', ''),
-                    'client_secret=<GOOGLE_OAUTH_CLIENT_SECRET>('client_secret', ''),
+                    'client_secret': token_data.get('client_secret', ''),
                     'refresh_token': token_data['refresh_token'],
                     'grant_type': 'refresh_token',
                 }).encode()

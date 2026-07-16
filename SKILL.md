@@ -9,6 +9,14 @@ includes:
 metadata:
   author: Indigo Karasu (indigokarasu)
   version: "4.3.0"
+  hermes:
+    category: data-science
+    tags:
+    - social-graph
+    - contacts
+    - relationships
+    - people
+    - OCAS-core
 tags:
 - social-graph
 - contacts
@@ -109,18 +117,18 @@ Every command that opens the database runs `_ensure_init()` first via `WeaveDB._
 
 The Weave social graph pipeline: **record → enrich → query → discover**.
 
-1. Record people, relationships, preferences, and shared experiences
-2. Enrich contacts via Scout/Sift/Sherlock pipeline
-3. Query the graph for recall, gifting, hosting, introductions
-4. Discover serendipitous connections between people
+- [ ] Record people, relationships, preferences, and shared experiences
+- [ ] Enrich contacts via Scout/Sift/Sherlock pipeline
+- [ ] Query the graph for recall, gifting, hosting, introductions
+- [ ] Discover serendipitous connections between people
 
 ## Run completion
 
 After every Weave command:
-1. Persist any new or updated records to the database.
-2. Log material decisions to `decisions.jsonl`.
-3. Write journal via `weave.journal`.
-4. **Read-back verification**: After every write, immediately query the DB by primary key. Confirm written data matches intent. Never claim success unconfirmed.
+- [ ] Persist any new or updated records to the database.
+- [ ] Log material decisions to `decisions.jsonl`.
+- [ ] Write journal via `weave.journal`.
+- [ ] **Read-back verification**: After every write, immediately query the DB by primary key. Confirm written data matches intent. Never claim success unconfirmed.
 
 ## Provenance
 

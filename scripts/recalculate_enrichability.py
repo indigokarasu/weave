@@ -17,6 +17,12 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+_HELP_ARGS = {"--help", "-h"}
+if set(sys.argv[1:]) & _HELP_ARGS:
+    print((__doc__ or "").strip() or "Usage: python3 recalculate_enrichability.py")
+    sys.exit(0)
+
+
 AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
 SQLITE_DB = AGENT_ROOT / "commons/db/ocas-weave/weave.sqlite"
 

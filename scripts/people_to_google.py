@@ -2,6 +2,13 @@
 Card fields only, properly labeled, TEMPORAL (current facts only). NEVER Notes,
 NEVER the Weave/OSINT enrichment (that stays in people.db). Returns (body, update_mask)."""
 import re
+import sys
+
+_HELP_ARGS = {"--help", "-h"}
+if set(sys.argv[1:]) & _HELP_ARGS:
+    print((__doc__ or "").strip() or "Usage: python3 people_to_google.py")
+    sys.exit(0)
+
 URL_LABEL=[("linkedin.com","LinkedIn"),("github.com","GitHub"),("developers.google.com","Google Developer"),
            ("x.com","X"),("twitter.com","X"),("scholar.google","Academic"),("researchgate","Academic"),
            ("semanticscholar","Academic"),("medium.com","Medium"),("instagram.com","Instagram"),

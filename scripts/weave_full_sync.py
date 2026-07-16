@@ -23,6 +23,12 @@ os.makedirs(LOG_DIR, exist_ok=True)
 sys.path.insert(0, str(Path(__file__).parent))
 from google_api import get_access_token, PEOPLE_API_BASE
 
+_HELP_ARGS = {"--help", "-h"}
+if set(sys.argv[1:]) & _HELP_ARGS:
+    print((__doc__ or "").strip() or "Usage: python3 weave_full_sync.py")
+    sys.exit(0)
+
+
 
 def api_request(method, path, data=None, token=None):
     url = f"{PEOPLE_API_BASE}/{path}"

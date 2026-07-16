@@ -39,6 +39,12 @@ from weave_enrich import (
     log, sift_extract_from_pages, enrich_weave_contact,
 )
 
+_HELP_ARGS = {"--help", "-h"}
+if set(sys.argv[1:]) & _HELP_ARGS:
+    print((__doc__ or "").strip() or "Usage: python3 overnight_enrichment.py")
+    sys.exit(0)
+
+
 
 # ─── Weave I/O ──────────────────────────────────────────────────────────────
 

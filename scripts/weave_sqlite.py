@@ -14,6 +14,13 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+import sys
+
+_HELP_ARGS = {"--help", "-h"}
+if set(sys.argv[1:]) & _HELP_ARGS:
+    print((__doc__ or "").strip() or "Usage: python3 weave_sqlite.py")
+    sys.exit(0)
+
 
 
 AGENT_ROOT = Path(__file__).resolve().parents[3]

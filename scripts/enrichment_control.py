@@ -12,6 +12,12 @@ import sys
 from pathlib import Path
 from datetime import datetime, timezone
 
+_HELP_ARGS = {"--help", "-h"}
+if set(sys.argv[1:]) & _HELP_ARGS:
+    print((__doc__ or "").strip() or "Usage: python3 enrichment_control.py")
+    sys.exit(0)
+
+
 AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
 PROGRESS_FILE = AGENT_ROOT / "data/weave-enrichment/progress.jsonl"
 STATS_FILE = AGENT_ROOT / "data/weave-enrichment/stats.json"

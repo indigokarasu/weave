@@ -9,6 +9,13 @@ import urllib.error
 import urllib.parse
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+import sys
+
+_HELP_ARGS = {"--help", "-h"}
+if set(sys.argv[1:]) & _HELP_ARGS:
+    print((__doc__ or "").strip() or "Usage: python3 google_api.py")
+    sys.exit(0)
+
 
 
 TOKEN_PATH = Path('/root/.google_workspace_mcp/credentials/google-workspace-user.json')

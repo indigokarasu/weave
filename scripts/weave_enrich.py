@@ -23,6 +23,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+_HELP_ARGS = {"--help", "-h"}
+if set(sys.argv[1:]) & _HELP_ARGS:
+    print((__doc__ or "").strip() or "Usage: python3 weave_enrich.py")
+    sys.exit(0)
+
+
 SEARXNG_URL = "http://localhost:8888/search"
 JINA_BASE = "https://r.jina.ai"
 

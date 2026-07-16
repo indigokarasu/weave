@@ -31,6 +31,12 @@ CONFIG_PATH = AGENT_ROOT / "commons/data/ocas-weave/config.json"
 sys.path.insert(0, str(Path(__file__).parent))
 from google_api import get_access_token, api_get as _api_get, api_post as _api_post, api_patch as _api_patch, PEOPLE_API_BASE
 
+_HELP_ARGS = {"--help", "-h"}
+if set(sys.argv[1:]) & _HELP_ARGS:
+    print((__doc__ or "").strip() or "Usage: python3 google_sync.py")
+    sys.exit(0)
+
+
 
 def _log(msg):
     print(msg, flush=True)

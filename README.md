@@ -1,7 +1,7 @@
 # weave
 
 <p align="center">
-<img src="./assets/readme/hero.svg" width="100%" alt="Weave: private social graph — provenance-backed contacts, relationships, preferences, and shared experiences.">
+<img src="./assets/readme/hero.jpg" width="100%" alt="Weave: private social graph — provenance-backed contacts, relationships, preferences, and shared experiences.">
 </p>
 
 weave — Weave: private social graph — provenance-backed contacts, relationships, preferences, and shared experiences.

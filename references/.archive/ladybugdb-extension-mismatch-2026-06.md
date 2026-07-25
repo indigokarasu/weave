@@ -30,9 +30,9 @@ ln -sf <hermes-home>/profiles/indigo/home/.lbdb/extension/0.17.0/linux_amd64/vec
       <hermes-home>/profiles/indigo/home/.lbdb/extension/0.15.0/linux_amd64/vector/libvector.lbug_extension
 
 # For default profile:
-mkdir -p /root/.lbdb/extension/0.15.0/linux_amd64/vector
-ln -sf /root/.lbdb/extension/0.17.0/linux_amd64/vector/libvector.lbug_extension \
-      /root/.lbdb/extension/0.15.0/linux_amd64/vector/libvector.lbug_extension
+mkdir -p <fs-root>/.lbdb/extension/0.15.0/linux_amd64/vector
+ln -sf <fs-root>/.lbdb/extension/0.17.0/linux_amd64/vector/libvector.lbug_extension \
+      <fs-root>/.lbdb/extension/0.15.0/linux_amd64/vector/libvector.lbug_extension
 ```
 
 ## Context

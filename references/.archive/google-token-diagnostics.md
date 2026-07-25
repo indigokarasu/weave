@@ -112,7 +112,7 @@ Then re-run the sync script. The checkpoint system (`staging/outbound_ckpt.txt`)
 
 ## Fixing TOKEN_PATH Corruption
 
-When TOKEN_PATH is truly corrupted (e.g., `***`, `/root/...json` truncated path, or invalid syntax), `patch` tool and `sed` may fail due to special characters. Use Python with regex:
+When TOKEN_PATH is truly corrupted (e.g., `***`, `<fs-root>/...json` truncated path, or invalid syntax), `patch` tool and `sed` may fail due to special characters. Use Python with regex:
 
 ```python
 import re
@@ -133,4 +133,4 @@ Verify the fix using byte-level checks (tool output may truncate long paths):
 
 ## Tool Output Truncation Warning
 
-`read_file`, `terminal`, and `execute_code` tools may truncate long paths in their output (e.g., `the Google OAuth credential file at<user-google-email>.json` → `/root/...json`). This is a **display artifact only** — the actual file content is usually correct. Verify with raw file reads before attempting fixes. **Never use truncated tool output to write files**, as this can persist corruption.
+`read_file`, `terminal`, and `execute_code` tools may truncate long paths in their output (e.g., `the Google OAuth credential file at<user-google-email>.json` → `<fs-root>/...json`). This is a **display artifact only** — the actual file content is usually correct. Verify with raw file reads before attempting fixes. **Never use truncated tool output to write files**, as this can persist corruption.

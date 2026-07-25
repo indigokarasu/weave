@@ -2,7 +2,7 @@
 
 ## Symptoms
 
-- `google_sync.py` or `contact_snapshots.py` fails with `FileNotFoundError` for a path that looks like `/root/...json` or `/root/...entials/<user-google-email>.json`
+- `google_sync.py` or `contact_snapshots.py` fails with `FileNotFoundError` for a path that looks like `<fs-root>/...json` or `<fs-root>/...entials/<user-google-email>.json`
 - `TOKEN_PATH` line in the script is shorter than ~80 bytes (the correct line is 80 bytes for <operator>'s path)
 - Script appears to run but fetches 0 or 1 contacts (wrong account — token points to a different user)
 - Hexdump of the script shows truncated or garbled path bytes
@@ -10,7 +10,7 @@
 ## Corruption Vectors
 
 1. **sed/asterisk replacement**: Using `sed` with patterns containing `*` or special chars can replace too broadly
-2. **read_file truncation written back**: The `read_file` tool truncates long paths in its output (e.g., `/root/...json`). If this truncated output is written back to a file, the path becomes permanently corrupted.
+2. **read_file truncation written back**: The `read_file` tool truncates long paths in its output (e.g., `<fs-root>/...json`). If this truncated output is written back to a file, the path becomes permanently corrupted.
 3. **Python string quoting in heredoc**: Writing Python code with nested quotes via `python3 -c "..."` causes shell quoting issues. Single quotes inside single-quoted strings break the command.
 4. **in-place sed without temp space**: `sed -i` fails with "No space left on device" even when disk has space, because sed needs tmp space.
 
@@ -19,7 +19,7 @@
 Both scripts should point to the same token file:
 
 ```python
-TOKEN_PATH='/root/...json'
+TOKEN_PATH='<fs-root>/...json'
 ```
 
 - `google_sync.py`: line ~27
@@ -57,7 +57,7 @@ python3 -c "import json; td=json.load(open('the Google OAuth credential file at<
 1. **Stop the LadybugDB bridge**: `systemctl stop ladybug-bridge-weave.service`
 2. **Use `patch` tool** (NOT sed) to replace the corrupted line:
    - `old_string`: the corrupted TOKEN_PATH line exactly as shown by `read_file`
-   - `new_string`: `TOKEN_PATH='/root/...json'`
+   - `new_string`: `TOKEN_PATH='<fs-root>/...json'`
 3. **Verify with hexdump** — the `patch` tool's diff output may also mask the path. Always verify with `hexdump -C` to confirm the full path is on disk.
 4. **Verify AST**: `python3 -c "import ast; ast.parse(open('script.py').read()); print('OK')"`
 5. **Restart bridge**: `systemctl start ladybug-bridge-weave.service`

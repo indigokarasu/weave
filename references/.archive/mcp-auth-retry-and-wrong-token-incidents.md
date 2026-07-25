@@ -4,7 +4,7 @@
 
 **Symptom**: Every MCP tool call returns either:
 - `"MCP server 'google-workspace' is unreachable after N consecutive failures. Auto-retry available in ~58s."`
-- `"ACTION REQUIRED: Google Authentication Needed for Google People for 'google-workspace-user'"` with a fresh auth URL each call
+- `"ACTION REQUIRED: Google Authentication Needed for Google People for '<user-google-email>'"` with a fresh auth URL each call
 
 **Root cause**: The "unreachable" counter accumulates across tool calls and sessions. Each failed call increments N and starts a ~60s cooldown. The auth URL has a fresh `state` parameter each time, confirming the MCP server spawns fresh per request and never reaches stored credentials.
 
@@ -17,11 +17,11 @@
 **Correct response**:
 1. If user says they're authorized, simply WAIT 60s for the cooldown and retry the MCP call
 2. If still failing after cooldown, ask user to re-authorize via the MCP's own auth URL (the one returned in the error)
-3. The MCP uses client ID `550801240087-vmc47b1gflj2biblqdr6bkekl7qqm8ls` and credentials dir `/root/.google_workspace_mcp/credentials/`
+3. The MCP uses client ID `550801240087-vmc47b1gflj2biblqdr6bkekl7qqm8ls` and credentials dir `<gworkspace-creds>/credentials/`
 
 ## Wrong-Token Sync Cross-Contamination (June 1 2026)
 
-**Incident**: The overnight enrichment pipeline's Google sync ran with Indigo's OAuth token instead of owner's (owner's token was expired since May 7). Evidence log entry: `"google_sync": "completed_with_indigo_token"`.
+**Incident**: The overnight enrichment pipeline's Google sync ran with the agent's OAuth token instead of <operator>'s (<operator>'s token was expired since May 7). Evidence log entry: `"google_sync": "completed_with_indigo_token"`.
 
 **Symptom reported by user**: "Zhenshuo Fang got merged with Karl Lindekugel" — visible in Google Contacts UI but NOT in Weave DB.
 
@@ -36,7 +36,7 @@
 - Zhenshuo Fang — Xiaomi, `people/c7279332960451507149`
 
 **Fix required**:
-1. Get valid Google OAuth for owner (re-authorize via MCP auth URL)
+1. Get valid Google OAuth for <operator> (re-authorize via MCP auth URL)
 2. Query Google Contacts API to see the merged state
 3. Separate the merged contact in Google Contacts
 4. Re-sync inbound to Weave to restore correct data

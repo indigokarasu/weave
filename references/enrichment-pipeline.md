@@ -39,11 +39,11 @@ Both import shared logic from `weave_enrich.py`:
 
 ```bash
 # Quick single-contact
-AGENT_ROOT=<hermes-home> HOME=/root \
+AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root \
   python3 quick_enrich.py "Jane Doe" --org "Acme Corp"
 
 # Overnight batch
-AGENT_ROOT=<hermes-home> HOME=/root \
+AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root \
   python3 overnight_enrichment.py
 ```
 

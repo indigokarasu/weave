@@ -32,7 +32,7 @@ Field map (Google → Weave):
 
 Inbound sync uses `google_sync.py` which handles pagination, matching (by resource name → email → phone), and gap-fill. Outbound sync pushes modified contacts via `BatchUpdateContacts` API.
 
-Run: `AGENT_ROOT=<hermes-home> HOME=/root python3 {skill_root}/scripts/google_sync.py`
+Run: `AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root python3 {skill_root}/scripts/google_sync.py`
 
 ## Google People API — Operational Learnings (Apr 2026, updated Jun 2026)
 
@@ -65,7 +65,7 @@ Run: `AGENT_ROOT=<hermes-home> HOME=/root python3 {skill_root}/scripts/google_sy
 - Clear invalid fields rather than pushing bad data to Google
 
 **Token path:**
-- All auth goes through `scripts/google_api.py` which reads from `google-workspace-user.json`
+- All auth goes through `scripts/google_api.py` which reads from `<user-google-email>.json`
 - The shared module handles token refresh automatically
 
 ## Contact Snapshot Safeguard (required before outbound sync)

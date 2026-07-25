@@ -32,15 +32,15 @@ The working sequence for running `google_sync.py` manually or from cron:
 ```bash
 timeout 10 systemctl stop ladybug-bridge-weave.service
 systemctl is-active ladybug-bridge-weave.service  # verify stopped
-AGENT_ROOT=<hermes-root> python3.13 <hermes-root>/skills/ocas-weave/scripts/google_sync.py
+AGENT_ROOT=<hermes-home> python3.13 <hermes-home>/skills/ocas-weave/scripts/google_sync.py
 timeout 10 systemctl start ladybug-bridge-weave.service
 ```
 
-Key: always wrap `systemctl stop/start` with `timeout 10` — systemctl hangs indefinitely on this unit. Also set `AGENT_ROOT=<hermes-root>` explicitly; the cron environment may not have it set, causing the script to compute `Path.home() / ".hermes"` which resolves to the wrong path on some configurations.
+Key: always wrap `systemctl stop/start` with `timeout 10` — systemctl hangs indefinitely on this unit. Also set `AGENT_ROOT=<hermes-home>` explicitly; the cron environment may not have it set, causing the script to compute `Path.home() / ".hermes"` which resolves to the wrong path on some configurations.
 
 ## `contacts.readonly` scope — persistent blocker since 2026-06-05
 
-The token at `/root/.google_workspace_mcp/credentials/google-workspace-user.json` has only `https://www.googleapis.com/auth/contacts.readable`. Outbound sync requires `https://www.googleapis.com/auth/contacts` (read-write). This has been blocking outbound for 3+ consecutive runs. Re-auth required by owner with full scope. Until then, the sync script wastes ~600 API calls per run on outbound that always 403s. Consider adding an early scope check that exits outbound before etag fetch when `contacts` scope is missing.
+The token at `<gworkspace-creds>/credentials/<user-google-email>.json` has only `https://www.googleapis.com/auth/contacts.readable`. Outbound sync requires `https://www.googleapis.com/auth/contacts` (read-write). This has been blocking outbound for 3+ consecutive runs. Re-auth required by <operator> with full scope. Until then, the sync script wastes ~600 API calls per run on outbound that always 403s. Consider adding an early scope check that exits outbound before etag fetch when `contacts` scope is missing.
 
 ## TOKEN_PATH corruption can be committed to git
 
@@ -50,7 +50,7 @@ As of June 2026, the TOKEN_PATH corruption in `google_sync.py` and `contact_snap
 
 ## Cross-profile patch guard blocks skill script edits
 
-The `patch` tool enforces a cross-profile guard: if the skill scripts live in `<hermes-root>/skills/` (default profile) but the agent runs under a different profile (e.g., `indigo`), `patch` will refuse to edit the file. In a cron context where you can't ask the user:
+The `patch` tool enforces a cross-profile guard: if the skill scripts live in `<hermes-home>/skills/` (default profile) but the agent runs under a different profile (e.g., `indigo`), `patch` will refuse to edit the file. In a cron context where you can't ask the user:
 
 1. Read file content with `read_file` (allowed across profiles)
 2. Fix content in a Python script written to `/tmp/` via `write_file`

@@ -4,7 +4,7 @@
 Agent-driven overnight enrichment cron run. Followed `references/cron-pipeline-runbook.md` and ignored the stale runbook embedded in the cron invocation message (it referenced `enrichment_data.py`, the LadybugDB bridge, and `execute_code` — all removed/blocked).
 
 ## Environment confirmed at start
-- Canonical DB path resolves via `parents[3]` — correct. `<hermes-root>/commons` is a symlink to `profiles/indigo/commons` (same inode), so no stale-DB removal was needed (the `parents[2]` stale-DB warning did not apply).
+- Canonical DB path resolves via `parents[3]` — correct. `<hermes-home>/commons` is a symlink to `profiles/indigo/commons` (same inode), so no stale-DB removal was needed (the `parents[2]` stale-DB warning did not apply).
 - `edges.target_id` has NO FK (only `source_id → persons(id)`). No FK migration needed.
 - WAL mode on.
 - SearXNG (`localhost:8888`) was up but degraded: Brave reported "too many requests", DuckDuckGo CAPTCHA, and off-topic results for specific-name queries ("Blaise Pascal" for "Blaise Agüera y Arcas").
@@ -27,7 +27,7 @@ Agent-driven overnight enrichment cron run. Followed `references/cron-pipeline-r
 
 ## Reusable patterns
 - Use `write_file` to a `/tmp/*.py` then `python3 /tmp/*.py` for all Python in cron (`execute_code` blocked; `python3 << 'EOF'` triggers false backgrounding detection).
-- Always `sys.path.insert(0, '<hermes-home>/skills/ocas-weave/scripts')` (absolute path).
+- Always `sys.path.insert(0, '<hermes-home>/profiles/indigo/skills/ocas-weave/scripts')` (absolute path).
 - Read-back verification pattern (assert the written field equals intent) + edge-count sanity check.
 - Structured blocker log schema: `{time, action:'blocker_reported', pipeline, issue, detail, enriched_this_run, skipped}`.
 - Structured data-quality flag schema: `{time, action:'flag_data_quality', person_id, name, issue:'email_mismatch', detail}`.
@@ -36,5 +36,5 @@ Agent-driven overnight enrichment cron run. Followed `references/cron-pipeline-r
 Total 1,060 | occ 1,020 (96.2%) | org 1,028 (97.0%) | both 1,013 (95.6%) | enrichment facts 270.
 
 ## Action items for next run
-- When search infra recovers, re-run to cover the remaining ~22 private-contact org gaps (Abi Jones, Jesse Lefkowitz, Jessica Boddicker, Rachel Berg, Ljubica Lu Chatman, <counterparty> Nguyen [after email fix], Mindy DelliCarpini, Debra Lee operator, Davy, etc.).
+- When search infra recovers, re-run to cover the remaining ~22 private-contact org gaps (Abi Jones, Jesse Lefkowitz, Jessica Boddicker, Rachel Berg, Ljubica Lu Chatman, <counterparty> Nguyen [after email fix], Mindy DelliCarpini, Debra Lee <operator-last>, Davy, etc.).
 - Investigate the `<counterparty> Nguyen` email mismatch at source (Google Contacts) before re-enriching.

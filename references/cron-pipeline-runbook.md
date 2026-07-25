@@ -13,7 +13,7 @@ The correct step-by-step runbook for the agent-driven overnight enrichment pipel
 
 ### Step 1: Inbound Google Sync
 ```bash
-cd <hermes-home>/skills/ocas-weave && AGENT_ROOT=<hermes-home> HOME=/root python3 -u scripts/google_sync.py
+cd <hermes-home>/profiles/indigo/skills/ocas-weave && AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root python3 -u scripts/google_sync.py
 ```
 Expected: ~977 contacts fetched, ~953 upserted, ~24 skipped. Outbound pushes ~587 contacts.
 
@@ -30,11 +30,11 @@ If restart fails, continue with web_search only — do NOT skip enrichment.
 
 **Note on duplicates:** The persons table may have duplicate records for the same real person (e.g., "Abi Jones" ×2, "Cameron Moberg" ×2, "Adam Abouraya" ×2). The SQL below returns one row per ID. When computing coverage metrics, track by distinct **name** not distinct ID — a name appearing once with both fields filled and once empty inflates the "neither" count misleadingly.
 
-**Note on DB sprawl:** If enrichment subagents have been dispatched in prior runs, check for and remove stale DB files before querying. Run: `find <hermes-root> -name "weave.sqlite" -type f | grep -v "profiles/indigo/commons"`. Remove any stale ones.
+**Note on DB sprawl:** If enrichment subagents have been dispatched in prior runs, check for and remove stale DB files before querying. Run: `find <hermes-home> -name "weave.sqlite" -type f | grep -v "profiles/indigo/commons"`. Remove any stale ones.
 
 ```python
 # Via terminal inline Python
-cd <hermes-home>/skills/ocas-weave && python3 -c "
+cd <hermes-home>/profiles/indigo/skills/ocas-weave && python3 -c "
 import sys
 sys.path.insert(0, 'scripts')
 from weave_sqlite import WeaveDB
@@ -132,7 +132,7 @@ For writing multiple contacts efficiently in a single terminal call:
 
 ```python
 import sys, json, uuid
-sys.path.insert(0, '<hermes-home>/skills/ocas-weave/scripts')  # ABSOLUTE PATH required in cron/subagent context
+sys.path.insert(0, '<hermes-home>/profiles/indigo/skills/ocas-weave/scripts')  # ABSOLUTE PATH required in cron/subagent context
 from weave_sqlite import WeaveDB
 from datetime import datetime, timezone
 

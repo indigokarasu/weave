@@ -43,7 +43,7 @@ def safe_get_all(conn, query):
 - `fuser -v /path/to/weave.lbug` shows which PID holds the lock
 - After a killed process (SIGTERM/SIGKILL), orphan processes may hold the lock
 - **Kill orphan**: `kill -9 <PID>` — repeat until `fuser` returns empty
-- **Stale WAL**: `rm -f <hermes-root>/commons/db/ocas-weave/weave.lbug.wal` after killed processes
+- **Stale WAL**: `rm -f <hermes-home>/commons/db/ocas-weave/weave.lbug.wal` after killed processes
 
 ## Maintenance Operations
 
@@ -51,7 +51,7 @@ def safe_get_all(conn, query):
 ```python
 from real_ladybug import Database, Connection
 
-db = Database("<hermes-root>/commons/db/ocas-weave/weave.lbug", read_only=True)
+db = Database("<hermes-home>/commons/db/ocas-weave/weave.lbug", read_only=True)
 conn = Connection(db)
 
 # Basic counts

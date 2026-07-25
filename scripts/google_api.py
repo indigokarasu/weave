@@ -18,7 +18,7 @@ if set(sys.argv[1:]) & _HELP_ARGS:
 
 
 
-TOKEN_PATH = Path('/root/.google_workspace_mcp/credentials/google-workspace-user.json')
+TOKEN_PATH = Path('/root/.google_workspace_mcp/credentials/os.environ.get("OCAS_OPERATOR_EMAIL", "operator@example.com").json')
 PEOPLE_API_BASE = 'https://people.googleapis.com/v1'
 
 

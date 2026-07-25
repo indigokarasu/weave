@@ -9,7 +9,7 @@ Inbound:  Google Contacts → Weave (SQLite)
 Outbound: Weave (SQLite) → Google Contacts
 
 Usage:
-    AGENT_ROOT=<hermes-home> HOME=/root python3 google_sync.py
+    AGENT_ROOT=os.path.expanduser("~/.hermes")/profiles/indigo HOME=/root python3 google_sync.py
 """
 import json
 import os
@@ -458,6 +458,6 @@ if __name__ == "__main__":
     except RuntimeError as e:
         if 'refresh token revoked' in str(e):
             import sys
-            print(f"ABORT: Google OAuth refresh token revoked. owner must re-authorize.", file=sys.stderr)
+            print(f"ABORT: Google OAuth refresh token revoked. the operator must re-authorize.", file=sys.stderr)
             sys.exit(2)
         raise

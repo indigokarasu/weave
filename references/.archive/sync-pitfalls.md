@@ -19,7 +19,11 @@ Detailed troubleshooting for Google Contacts sync issues. For token/auth issues,
 - `otherContacts()` API is unreliable — use REST with `contacts.other.readonly` scope instead
 - `expiry` field in token may be ISO string or integer; handle both
 - **Scope expansion always requires re-auth with `prompt=consent&access_type=offline`** — but the Desktop OAuth client (`628032148246-scqt66f1s2533k7u06gjre7k7jo1sbqt`) rejects many GCloud infra scopes as invalid (e.g. `dns`, `speech`, `language`, `file`, `secretmanager`, `iap`, `vpcaccess`, `artifactregistry`, `containerregistry`, `cloudscheduler`, `accesscontextmanager`, `gan`, `certificatemanager`, `firebase.management`, `networkmanagement`, and their `.readonly` variants). Only ~88 of 100+ requested scopes are valid. Google returns `invalid_scope` error listing valid vs invalid. Use only the valid scopes — see `references/google-sync-ops.md` for the current valid scope list.
+<<<<<<< Updated upstream
 - **Paste-back OAuth flow**: The listener timeout must be ≥ 15 minutes for user interaction. The `oauth_complete_v2.py` script at `<hermes-home>/scripts/oauth_complete_v2.py` has a 15-minute timeout and writes the code to `/tmp/oauth_code.txt` immediately on receipt. If the process dies, the code is still in that file.
+=======
+- **Paste-back OAuth flow**: The listener timeout must be ≥ 15 minutes for user interaction. The `oauth_complete_v2.py` script at `~/.hermes/scripts/oauth_complete_v2.py` has a 15-minute timeout and writes the code to `/tmp/oauth_code.txt` immediately on receipt. If the process dies, the code is still in that file.
+>>>>>>> Stashed changes
 - Bulk imports (>100 rows) should use `COPY FROM` not individual inserts
 - Provenance for imported contacts: `source_type='imported'`, `confidence=0.8`
 - Outbound PATCH requires current etag from Google — fetch etag before update
@@ -36,7 +40,11 @@ Detailed troubleshooting for Google Contacts sync issues. For token/auth issues,
 - **Manual sync via background process**: Always use `terminal(background=true, notify_on_complete=true, timeout=600)`. The script takes ~280s for ~900 contacts.
 - **Multi-run resilience**: The checkpoint system (`staging/outbound_ckpt.txt`) survives process kills and restarts.
 - **Process spawning**: The Python script spawns a child process (ladybug C extension). Two PIDs is normal.
+<<<<<<< Updated upstream
 - **Package: use `ladybug`, NOT `real_ladybug`** (June 2026): The `real_ladybug` package causes segfaults (exit 139) and DB version mismatch errors. All direct-DB scripts must use `import ladybug as lb`. Before importing, set the extension path: `os.environ['LADYBUG_EXTENSION_PATH'] = str(Path('<hermes-home>/profiles/indigo/home/.lbdb/extension/0.17.0/linux_amd64'))`. The `real_ladybug` package is incompatible with the current DB file version.
+=======
+- **Package: use `ladybug`, NOT `real_ladybug`** (June 2026): The `real_ladybug` package causes segfaults (exit 139) and DB version mismatch errors. All direct-DB scripts must use `import ladybug as lb`. Before importing, set the extension path: `os.environ['LADYBUG_EXTENSION_PATH'] = str(Path('~/.hermes/profiles/indigo/home/.lbdb/extension/0.17.0/linux_amd64'))`. The `real_ladybug` package is incompatible with the current DB file version.
+>>>>>>> Stashed changes
 - **Output buffering**: stdout appears empty for 90-120+ seconds despite the script actively working. Do NOT kill the process thinking it's hung.
 - **Do NOT use SIGUSR1**: Causes `RuntimeError`. Use `/proc/<pid>/wchan`, `ss -tnp`, and checkpoint file inspection instead.
 
@@ -55,7 +63,11 @@ Kill, re-check, repeat until `fuser` returns empty. The `.wal` file from a kille
 
 ## LadybugDB Bridge Server Lock (June 2026)
 
+<<<<<<< Updated upstream
 The `ladybug_bridge.py` server (`<hermes-home>/scripts/ladybug_bridge.py`) runs as a persistent service (typically on port 9191) and holds an **exclusive write lock** on `weave.lbug` for its entire lifetime. Any script that opens the DB directly via `ladybug.Database(path)` — including `google_sync.py`, `weave_health_check.py`, and all enrichment scripts — will fail with:
+=======
+The `ladybug_bridge.py` server (`~/.hermes/scripts/ladybug_bridge.py`) runs as a persistent service (typically on port 9191) and holds an **exclusive write lock** on `weave.lbug` for its entire lifetime. Any script that opens the DB directly via `ladybug.Database(path)` — including `google_sync.py`, `weave_health_check.py`, and all enrichment scripts — will fail with:
+>>>>>>> Stashed changes
 
 ```
 RuntimeError: IO exception: Could not set lock on file : .../weave.lbug
@@ -63,7 +75,11 @@ RuntimeError: IO exception: Could not set lock on file : .../weave.lbug
 
 **Diagnosis**:
 ```bash
+<<<<<<< Updated upstream
 fuser <hermes-home>/commons/db/ocas-weave/weave.lbug
+=======
+fuser ~/.hermes/commons/db/ocas-weave/weave.lbug
+>>>>>>> Stashed changes
 # If PID belongs to ladybug_bridge.py:
 ps aux | grep ladybug_bridge
 ```
@@ -99,6 +115,7 @@ systemctl daemon-reload
 kill -9 $(pgrep -f "ladybug_bridge.*weave")
 
 # 3. Verify lock is released
+<<<<<<< Updated upstream
 fuser <hermes-home>/commons/db/ocas-weave/weave.lbug  # should return empty
 
 # 4. Remove stale WAL
@@ -106,6 +123,15 @@ rm -f <hermes-home>/commons/db/ocas-weave/weave.lbug.wal
 
 # 5. Run the sync/script
 cd <hermes-home> && HOME=/root AGENT_ROOT=<hermes-home> python3 <script>
+=======
+fuser ~/.hermes/commons/db/ocas-weave/weave.lbug  # should return empty
+
+# 4. Remove stale WAL
+rm -f ~/.hermes/commons/db/ocas-weave/weave.lbug.wal
+
+# 5. Run the sync/script
+cd ~/.hermes && HOME=/root AGENT_ROOT=~/.hermes python3 <script>
+>>>>>>> Stashed changes
 
 # 6. Restore and restart the bridge
 mv /etc/systemd/system/ladybug-bridge-weave.service.bak /etc/systemd/system/ladybug-bridge-weave.service

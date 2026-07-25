@@ -39,11 +39,19 @@ Both import shared logic from `weave_enrich.py`:
 
 ```bash
 # Quick single-contact
+<<<<<<< Updated upstream
 AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root \
   python3 quick_enrich.py "Jane Doe" --org "Acme Corp"
 
 # Overnight batch
 AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root \
+=======
+AGENT_ROOT=~/.hermes/profiles/indigo HOME=/root \
+  python3 quick_enrich.py "Jane Doe" --org "Acme Corp"
+
+# Overnight batch
+AGENT_ROOT=~/.hermes/profiles/indigo HOME=/root \
+>>>>>>> Stashed changes
   python3 overnight_enrichment.py
 ```
 

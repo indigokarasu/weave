@@ -4,7 +4,11 @@
 Agent-driven overnight enrichment cron run. Followed `references/cron-pipeline-runbook.md` and ignored the stale runbook embedded in the cron invocation message (it referenced `enrichment_data.py`, the LadybugDB bridge, and `execute_code` — all removed/blocked).
 
 ## Environment confirmed at start
+<<<<<<< Updated upstream
 - Canonical DB path resolves via `parents[3]` — correct. `<hermes-home>/commons` is a symlink to `profiles/indigo/commons` (same inode), so no stale-DB removal was needed (the `parents[2]` stale-DB warning did not apply).
+=======
+- Canonical DB path resolves via `parents[3]` — correct. `~/.hermes/commons` is a symlink to `profiles/indigo/commons` (same inode), so no stale-DB removal was needed (the `parents[2]` stale-DB warning did not apply).
+>>>>>>> Stashed changes
 - `edges.target_id` has NO FK (only `source_id → persons(id)`). No FK migration needed.
 - WAL mode on.
 - SearXNG (`localhost:8888`) was up but degraded: Brave reported "too many requests", DuckDuckGo CAPTCHA, and off-topic results for specific-name queries ("Blaise Pascal" for "Blaise Agüera y Arcas").
@@ -27,7 +31,11 @@ Agent-driven overnight enrichment cron run. Followed `references/cron-pipeline-r
 
 ## Reusable patterns
 - Use `write_file` to a `/tmp/*.py` then `python3 /tmp/*.py` for all Python in cron (`execute_code` blocked; `python3 << 'EOF'` triggers false backgrounding detection).
+<<<<<<< Updated upstream
 - Always `sys.path.insert(0, '<hermes-home>/profiles/indigo/skills/ocas-weave/scripts')` (absolute path).
+=======
+- Always `sys.path.insert(0, '~/.hermes/profiles/indigo/skills/ocas-weave/scripts')` (absolute path).
+>>>>>>> Stashed changes
 - Read-back verification pattern (assert the written field equals intent) + edge-count sanity check.
 - Structured blocker log schema: `{time, action:'blocker_reported', pipeline, issue, detail, enriched_this_run, skipped}`.
 - Structured data-quality flag schema: `{time, action:'flag_data_quality', person_id, name, issue:'email_mismatch', detail}`.

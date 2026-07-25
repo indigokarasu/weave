@@ -5,7 +5,7 @@ The Weave social graph visualizer runs on DreamHost, live-connecting to the VPS 
 ## Architecture
 
 ```
-Browser → https://indigokarasu.com/weave/
+Browser → https://<agent-handle>.com/weave/
   → index.html (D3.js force graph, static)
   → /weave/api/index.cgi (Python CGI, proxies Cypher queries)
     → http://127.0.0.1:9192 (autossh reverse tunnel)
@@ -38,7 +38,7 @@ iptables -I INPUT -p tcp --dport 9191 -j DROP
 
 ### 3. DreamHost CGI API (`weave-api.cgi`)
 
-- Python CGI at `~/indigokarasu.com/weave/api/index.cgi`
+- Python CGI at `~/<agent-handle>.com/weave/api/index.cgi`
 - Proxies Cypher queries to `http://127.0.0.1:9192` (tunnel)
 - Endpoints: `/health`, `/stats`, `/persons`, `/person/<id>`, `/relationships`, `/graph`, `/query`
 - Read-only: rejects CREATE/DELETE/SET/REMOVE/MERGE/DROP

@@ -33,7 +33,7 @@ After this fix, both `import real_ladybug` and `import ladybug` work in both Pyt
 **Always use `/usr/bin/python3` (system Python 3.13) for Weave DB scripts:**
 
 ```bash
-/usr/bin/python3 -u <hermes-root>/skills/ocas-weave/scripts/google_sync.py
+/usr/bin/python3 -u <hermes-home>/skills/ocas-weave/scripts/google_sync.py
 ```
 
 **Override `HOME` in cron contexts:**
@@ -41,7 +41,7 @@ After this fix, both `import real_ladybug` and `import ladybug` work in both Pyt
 HOME=/root /usr/bin/python3 -u /path/to/script.py
 ```
 
-Cron sets `HOME=<hermes-home>/home`, which breaks `Path.home()` resolution.
+Cron sets `HOME=<hermes-home>/profiles/indigo/home`, which breaks `Path.home()` resolution.
 
 ## Verification
 
@@ -49,7 +49,7 @@ Cron sets `HOME=<hermes-home>/home`, which breaks `Path.home()` resolution.
 # Test real_ladybug import + DB access
 /usr/bin/python3 -c "
 import real_ladybug as lb
-db = lb.Database('<hermes-root>/commons/db/ocas-weave/weave.lbug')
+db = lb.Database('<hermes-home>/commons/db/ocas-weave/weave.lbug')
 conn = lb.Connection(db)
 r = conn.execute('MATCH (p:Person) RETURN count(p)')
 print('OK:', r.get_all())

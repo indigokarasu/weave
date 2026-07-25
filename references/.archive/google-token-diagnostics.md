@@ -7,7 +7,7 @@ Complete diagnostic workflow for Google OAuth token issues: scope verification, 
 ### 1. Verify token file scopes
 
 ```bash
-python3 -c "import json; td=json.load(open('the Google OAuth credential file atgoogle-workspace-user.json')); print(td.get('scopes', []))"
+python3 -c "import json; td=json.load(open('the Google OAuth credential file at<user-google-email>.json')); print(td.get('scopes', []))"
 ```
 
 Required scopes for Weave sync:
@@ -21,7 +21,7 @@ The full URI scope `https://www.googleapis.com/auth/contacts` is equivalent to t
 
 ```python
 import json, urllib.request, urllib.parse
-with open('the Google OAuth credential file atgoogle-workspace-user.json') as f:
+with open('the Google OAuth credential file at<user-google-email>.json') as f:
     td = json.load(f)
 req = urllib.request.Request(
     'https://oauth2.googleapis.com/token',
@@ -47,7 +47,7 @@ except urllib.error.HTTPError as e:
 grep TOKEN_PATH {skill_root}/scripts/google_sync.py
 ```
 
-Correct path: `TOKEN_PATH = 'the Google OAuth credential file atgoogle-workspace-user.json'`
+Correct path: `TOKEN_PATH = 'the Google OAuth credential file at<user-google-email>.json'`
 
 ### 4. Verify the script parses correctly
 
@@ -73,7 +73,7 @@ Two distinct failure modes:
 
 ### Fixes
 
-- **Wrong file**: Patch `TOKEN_PATH` to `the Google OAuth credential file atgoogle-workspace-user.json`
+- **Wrong file**: Patch `TOKEN_PATH` to `the Google OAuth credential file at<user-google-email>.json`
 - **Dead refresh token**: Full re-auth required with `access_type=offline&prompt=consent`
 - **Both problematic**: Full re-auth required regardless
 
@@ -89,7 +89,7 @@ The script's `get_access_token()` can fail silently — the refresh call throws 
 python3 -c "
 import json, urllib.request, urllib.parse
 from datetime import datetime, timezone, timedelta
-with open('the Google OAuth credential file atgoogle-workspace-user.json') as f:
+with open('the Google OAuth credential file at<user-google-email>.json') as f:
     td = json.load(f)
 resp = urllib.request.urlopen(urllib.request.Request(
     'https://oauth2.googleapis.com/token',
@@ -102,7 +102,7 @@ resp = urllib.request.urlopen(urllib.request.Request(
 new = json.loads(resp.read())
 td['token'] = new['access_token']
 td['expiry'] = (datetime.now(timezone.utc) + timedelta(seconds=new['expires_in'])).isoformat()
-with open('the Google OAuth credential file atgoogle-workspace-user.json', 'w') as f:
+with open('the Google OAuth credential file at<user-google-email>.json', 'w') as f:
     json.dump(td, f, indent=2)
 print('Token refreshed, expires:', td['expiry'])
 "
@@ -120,7 +120,7 @@ with open('{skill_root}/scripts/google_sync.py', 'rb') as f:
     content = f.read()
 new_content = re.sub(
     rb'TOKEN_PATH\s*=\s*"[^"]*"',
-    rb'TOKEN_PATH="the Google OAuth credential file atgoogle-workspace-user.json"',
+    rb'TOKEN_PATH="the Google OAuth credential file at<user-google-email>.json"',
     content
 )
 with open('{skill_root}/scripts/google_sync.py', 'wb') as f:
@@ -133,4 +133,4 @@ Verify the fix using byte-level checks (tool output may truncate long paths):
 
 ## Tool Output Truncation Warning
 
-`read_file`, `terminal`, and `execute_code` tools may truncate long paths in their output (e.g., `the Google OAuth credential file atgoogle-workspace-user.json` → `/root/...json`). This is a **display artifact only** — the actual file content is usually correct. Verify with raw file reads before attempting fixes. **Never use truncated tool output to write files**, as this can persist corruption.
+`read_file`, `terminal`, and `execute_code` tools may truncate long paths in their output (e.g., `the Google OAuth credential file at<user-google-email>.json` → `/root/...json`). This is a **display artifact only** — the actual file content is usually correct. Verify with raw file reads before attempting fixes. **Never use truncated tool output to write files**, as this can persist corruption.

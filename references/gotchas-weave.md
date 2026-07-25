@@ -11,8 +11,8 @@
 ## Google OAuth and Sync
 
 - **NEVER silently fall back to an alternate account's token**: When the primary user's token is expired, revoked, or empty, halt immediately. Log `auth_failure` in evidence.
-- **TOKEN_PATH must match the correct user account**: `google_api.py` uses `google-workspace-user.json`. All Weave scripts import from `google_api.py` — never duplicate auth logic.
-- **`contacts.readonly` vs `contacts` scope**: Inbound sync works with readonly, but outbound fails with HTTP 403. Check scopes before running outbound. **Differential diagnosis**: a 403 (Forbidden) on outbound = the token is VALID but lacks the write `scope` (`https://www.googleapis.com/auth/contacts`); a 401 `invalid_grant` = the refresh token is revoked/expired (token INVALID). Different root cause, different fix — a 403 means add the write scope / re-consent with Contacts scope, NOT "owner must re-authorize because the token was revoked." Don't conflate them. Both runs of the 2026-07-07 enrichment hit persistent 403 on all 588 outbound contacts while inbound (readonly) succeeded.
+- **TOKEN_PATH must match the correct user account**: `google_api.py` uses `<user-google-email>.json`. All Weave scripts import from `google_api.py` — never duplicate auth logic.
+- **`contacts.readonly` vs `contacts` scope**: Inbound sync works with readonly, but outbound fails with HTTP 403. Check scopes before running outbound. **Differential diagnosis**: a 403 (Forbidden) on outbound = the token is VALID but lacks the write `scope` (`https://www.googleapis.com/auth/contacts`); a 401 `invalid_grant` = the refresh token is revoked/expired (token INVALID). Different root cause, different fix — a 403 means add the write scope / re-consent with Contacts scope, NOT "<operator> must re-authorize because the token was revoked." Don't conflate them. Both runs of the 2026-07-07 enrichment hit persistent 403 on all 588 outbound contacts while inbound (readonly) succeeded.
 - **Skip outbound entirely when scope is insufficient**: Don't fetch etags for 582+ contacts when all batch PATCH calls will 403.
 - **Outbound checkpoint file accumulates stale entries after failures**: Clear checkpoint if previous run pushed 0.
 - **Cron `HOME` env var breaks `Path.home()`**: Override `HOME=/root` when running sync scripts.
@@ -56,7 +56,7 @@
 - **`enrichment_data.py` does NOT exist**: There is no `enrichment_data.py` script. The pipeline instructions that reference it (`searxng-ensure`, `list`, `write`, `stats` subcommands) are stale. Use direct Python/WeaveDB queries and `curl` for SearXNG health checks instead.
 - **`web_extract` + SearXNG backend**: The `web_extract` tool fails with "SearXNG is a search-only backend and cannot extract URL content." Use `curl -s "https://r.jina.ai/URL"` for page content fetching instead. This applies to all URLs, not just LinkedIn.
 - **LadybugDB bridge service removed**: The `ladybug-bridge-weave.service` no longer exists after the SQLite migration (June 2026). Do not attempt `systemctl stop/start` on it.
-- **Google OAuth `invalid_grant`**: When `google_sync.py` fails with HTTP 401 and the token endpoint returns `invalid_grant: Token has been expired or revoked`, the refresh token is permanently invalid. owner must re-authorize the OAuth consent flow. Log the failure and continue enrichment using MCP tools — do not halt the pipeline.
+- **Google OAuth `invalid_grant`**: When `google_sync.py` fails with HTTP 401 and the token endpoint returns `invalid_grant: Token has been expired or revoked`, the refresh token is permanently invalid. <operator> must re-authorize the OAuth consent flow. Log the failure and continue enrichment using MCP tools — do not halt the pipeline.
 
 ## LinkedIn Profile Fetching (June 2026)
 

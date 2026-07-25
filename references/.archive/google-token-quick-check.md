@@ -11,7 +11,7 @@ python3 -c "
 import json, urllib.request, urllib.parse, sys
 from datetime import datetime, timezone
 
-TOKEN_PATH = 'the Google OAuth credential file atgoogle-workspace-user.json'
+TOKEN_PATH = 'the Google OAuth credential file at<user-google-email>.json'
 REQUIRED_SCOPES = {'contacts', 'https://www.googleapis.com/auth/contacts'}
 
 with open(TOKEN_PATH) as f:

@@ -26,7 +26,7 @@ Writing a Python script to `/tmp/weave_batch_enrich_vN.py` and running with `pyt
 The invocation message contained a hardcoded runbook referencing `enrichment_data.py` and `systemctl stop ladybug-bridge-weave.service` — both removed. I caught this from the skill's own docs but wasted a tool call on the bridge stop before realizing. **Fix**: Added top-level "CRON INVOCATION" section to skill.
 
 ### google_sync.py requires AGENT_ROOT env var
-Running `python3 google_sync.py` without `AGENT_ROOT=<hermes-home> HOME=/root` fails with `FileNotFoundError` for config.json. The skill's background tasks table shows the correct invocation, but the runbook didn't include it.
+Running `python3 google_sync.py` without `AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root` fails with `FileNotFoundError` for config.json. The skill's background tasks table shows the correct invocation, but the runbook didn't include it.
 
 ### Subagent ID mismatch
 Subagents sometimes used different person IDs than expected (e.g., Cameron Moberg had two records: `8d3db255` and `41753824`). Both needed enrichment. Always query by name to find all variants.
@@ -56,7 +56,7 @@ Gwendolyn McGinn, Shelley Reed Stoltz, Stephanie Goodnight, Karen Simonsen — c
 | Ryan Gross | Owner / Vintage Dealer | BottleSnake Vintage and Designer Goods | inferred |
 | Abi Jones (×2) | UX Design Manager | Google | linkedin.com/in/jonesabi |
 | Jessica Phoenix | Volcanologist, Podcast Host, Writer | Independent / Freelance | linkedin.com/in/volcanojess |
-| Laurie A Greengrass operator | Healing Practitioner / Owner | LZ's Healing Hands | inferred |
+| Laurie A Greengrass <operator-last> | Healing Practitioner / Owner | LZ's Healing Hands | inferred |
 | Seamus McDonald | Tattoo Artist | Traditional Ink | subagent |
 | Liv Keil | Chefrådgiver | Operate A/S | subagent |
 | Pernilla Nilsson | Professor | Högskolan i Halmstad | subagent |
@@ -65,7 +65,7 @@ Gwendolyn McGinn, Shelley Reed Stoltz, Stephanie Goodnight, Karen Simonsen — c
 | Jody Badiei | Owner | Clocktower Coffee Roasting Co. | subagent |
 
 ## Action Items for Next Run
-1. **owner must re-authorize Google OAuth** — token is revoked, sync is unavailable
+1. **<operator> must re-authorize Google OAuth** — token is revoked, sync is unavailable
 2. Clear pre-existing garbage data before enriching (still some junk values from prior runs)
 3. Consider merging duplicate person records (Abi Jones ×2, Cameron Moberg ×2)
 4. The 51 remaining "neither filled" contacts are mostly businesses or unresolvable names

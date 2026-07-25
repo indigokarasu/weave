@@ -13,7 +13,11 @@ Systematic inspection, cleaning, and data quality validation for the Weave SQLit
 ## Quick Health Check
 
 ```bash
+<<<<<<< Updated upstream
 cd <hermes-home>/commons/db/ocas-weave && sqlite3 weave.sqlite "
+=======
+cd ~/.hermes/commons/db/ocas-weave && sqlite3 weave.sqlite "
+>>>>>>> Stashed changes
 SELECT 'persons' as tbl, COUNT(*) FROM persons
 UNION ALL SELECT 'edges', COUNT(*) FROM edges
 UNION ALL SELECT 'facts', COUNT(*) FROM facts
@@ -203,8 +207,16 @@ Only delete orphan Preferences/Facts when confirmed disconnected from any Person
 
 ```bash
 # Simple file copy (WAL mode — copy all three files)
+<<<<<<< Updated upstream
 cp <hermes-home>/commons/db/ocas-weave/weave.sqlite{,-wal,-shm} /backup/path/
 
 # Or use SQLite's backup API
 sqlite3 <hermes-home>/commons/db/ocas-weave/weave.sqlite ".backup /backup/path/weave.sqlite"
 ```
+=======
+cp ~/.hermes/commons/db/ocas-weave/weave.sqlite{,-wal,-shm} /backup/path/
+
+# Or use SQLite's backup API
+sqlite3 ~/.hermes/commons/db/ocas-weave/weave.sqlite ".backup /backup/path/weave.sqlite"
+```
+>>>>>>> Stashed changes

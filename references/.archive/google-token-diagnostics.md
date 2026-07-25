@@ -133,4 +133,8 @@ Verify the fix using byte-level checks (tool output may truncate long paths):
 
 ## Tool Output Truncation Warning
 
+<<<<<<< Updated upstream
 `read_file`, `terminal`, and `execute_code` tools may truncate long paths in their output (e.g., `the Google OAuth credential file at<user-google-email>.json` → `<fs-root>/...json`). This is a **display artifact only** — the actual file content is usually correct. Verify with raw file reads before attempting fixes. **Never use truncated tool output to write files**, as this can persist corruption.
+=======
+`read_file`, `terminal`, and `execute_code` tools may truncate long paths in their output (e.g., `the Google OAuth credential file at<user-google-email>.json` → `<fs-root>/...json`). This is a **display artifact only** — the actual file content is usually correct. Verify with raw file reads before attempting fixes. **Never use truncated tool output to write files**, as this can persist corruption.
+>>>>>>> Stashed changes

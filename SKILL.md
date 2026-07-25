@@ -2,7 +2,7 @@
 name: ocas-weave
 license: MIT
 description: 'Private provenance-backed social graph. Maintains queryable records of people, relationships, preferences, and shared experiences for recall, gifting, hosting, introductions, and serendipity. Use for storing or retrieving facts about a person, recording a relationship, or discovering connections between people. Not for sending messages (use Dispatch), calendar management (use Sands), OSINT research (use Scout), or web research without a social graph need (use Sift).'
-source: https://github.com/indigokarasu/weave
+source: https://github.com/<agent-handle>/weave
 includes:
 - references/**
 - scripts/**
@@ -59,7 +59,11 @@ Weave maintains a private, provenance-backed social graph of people, relationshi
 
 ## Auth Rule — <operator> Only
 
+<<<<<<< Updated upstream
 **Weave exclusively uses <operator>'s Google auth (`<user-google-email>`).** Never use the agent's account for any Weave operation. The `TOKEN_PATH` in `google_sync.py` is hardcoded to `<user-google-email>.json`. Violation silently fetches wrong contact data.
+=======
+**Weave exclusively uses <operator>'s Google auth (`<user-google-email>`).** Never use the agent's account for any Weave operation. The `TOKEN_PATH` in `google_sync.py` is hardcoded to `<user-google-email>.json`. Violation silently fetches wrong contact data.
+>>>>>>> Stashed changes
 
 **ALWAYS sync Contacts after changes** via `scripts/google_sync.py`. This is the canonical sync path — never skip it after a contact mutation.
 
@@ -139,9 +143,15 @@ Every written fact requires: `source_type` (direct / inferred / imported / user-
 ### Pre-Enrichment Checklist
 1. Run inbound Google sync
 2. Check SearXNG health
+2.5. **Probe ALL discovery sources before committing to the run**: `python3 scripts/discovery_probe.py`. If every source reports down (web_search empty, SearXNG engines suspended, DDG anomaly-blocked, no LinkedIn MCP), do NOT start per-contact processing — follow the **Discovery Source Availability & No-Fabrication Rule** (defer real people, skip non-persons/unresolvables, write no facts). If ≥1 source is live, proceed with the fallback chain in `references/discovery-fallback.md`.
 3. **Clear pre-existing garbage** — scan for known junk values before enriching so COALESCE preserves nothing
+<<<<<<< Updated upstream
 4. placeholder — the `parents[2]` path bug in scripts can create stale DB files at `<hermes-home>/commons/db/ocas-weave/weave.sqlite`, `<hermes-home>/profiles/commons/db/ocas-weave/weave.sqlite`, and `<hermes-home>/profiles/indigo/skills/commons/db/ocas-weave/weave.sqlite`. Only the canonical path (`<hermes-home>/profiles/indigo/commons/db/ocas-weave/weave.sqlite`) is correct. Stale DBs confuse subagent enrichment writes. Remove them before enriching.
 5. **Check edges FK constraint** — run `python3 -c "import sqlite3; c=sqlite3.connect('<hermes-home>/profiles/indigo/commons/db/ocas-weave/weave.sqlite'); r=c.execute('PRAGMA foreign_key_list(edges)').fetchall(); print(r)"`. If `target_id` references `persons(id)`, run `python3 scripts/migrate_edges_fk.py` before enriching. The `target_id` column is polymorphic (can point to `facts.id` or `preferences.id`) — a wrong FK causes `HasFact` edge inserts to fail silently.
+=======
+4. placeholder — the `parents[2]` path bug in scripts can create stale DB files at `~/.hermes/commons/db/ocas-weave/weave.sqlite`, `~/.hermes/profiles/commons/db/ocas-weave/weave.sqlite`, and `~/.hermes/profiles/indigo/skills/commons/db/ocas-weave/weave.sqlite`. Only the canonical path (`~/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite`) is correct. Stale DBs confuse subagent enrichment writes. Remove them before enriching.
+5. **Check edges FK constraint** — run `python3 -c "import sqlite3; c=sqlite3.connect('~/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite'); r=c.execute('PRAGMA foreign_key_list(edges)').fetchall(); print(r)"`. If `target_id` references `persons(id)`, run `python3 scripts/migrate_edges_fk.py` before enriching. The `target_id` column is polymorphic (can point to `facts.id` or `preferences.id`) — a wrong FK causes `HasFact` edge inserts to fail silently.
+>>>>>>> Stashed changes
 6. Query contacts with gaps
 7. Process each contact through Scout → Sift → Sherlock → Write
 8. Run periodic Google sync after every 10 enriched contacts
@@ -171,6 +181,35 @@ See `references/connectors.md` for full sync rules. Key points:
 ## Recovery behavior
 
 See `references/recovery-weave.md` for the full recovery contract.
+
+## Discovery Source Availability & No-Fabrication Rule
+
+Every enrichment run depends on a working Scout source. In agent/cron context these sources
+are external and can fail as a group. **There is no point in the pipeline where fabricating
+occupation/org data is acceptable.** If you cannot discover real data, you MUST NOT write it.
+
+**At pipeline start, run `python3 scripts/discovery_probe.py`** to test which sources are live.
+Interpreting results:
+- `web_search` (MCP) — verify in-session it returns non-empty `data.web`. Empty `success:true`
+  payloads = non-functional; treat as down.
+- SearXNG — see `unresponsive_engines`. `brave: too many requests` = **rate-limited, recovers
+  after backoff** (space queries 15–20s apart; retry with `2**(n+1)*5`s sleeps). `karmasearch:
+  access denied` = needs re-grant, won't recover this run. A single 0-result response is NOT
+  proof of death — a later query can return results.
+- DuckDuckGo HTML — last-resort discovery (curl + regex on `result__a`); hard rate-limits to an
+  HTTP 202 anomaly page after a few queries. **Never burn DDG on test queries.** See
+  `references/discovery-fallback.md`.
+
+**Decision matrix when Scout is degraded/unavailable:**
+| Situation | Action |
+|---|---|
+| ≥1 source live | Proceed with fallback chain (LinkedIn MCP → web_search → SearXNG → DDG). |
+| ALL sources down | Do **not** run Sift/Sherlock on zero input. Instead: (a) skip non-person/business + unresolvable contacts normally; (b) **defer** real people who already carry recoverable Google-sync context (missing only one field) — they are queued, not dropped; (c) log a `pipeline_blocked` decision with `"stage":"scout"` and the unavailable-source list; (d) write **NO** enrichment facts. |
+| Some contacts resolvable, others not | Enrich the resolvable ones; defer/skip the rest per `references/unresolvable-contacts.md`. |
+
+**No-fabrication is non-negotiable:** an empty discovery result means "no data," never "write a
+best guess." Reporting a blocked run honestly (and deferring real people) is the correct outcome.
+See `references/discovery-fallback.md` for the full fallback playbook and `scripts/discovery_probe.py`.
 
 ## Constraints
 
@@ -211,7 +250,11 @@ On first invocation, `_open_db()` handles auto-initialization. See `references/i
 | Job name | Schedule | Command |
 |---|---|---|
 | `weave:update` | `0 0 * * *` | `weave.update` |
+<<<<<<< Updated upstream
 | `weave:sync-google` | `0 4 * * *` | `AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root python3 -u {skill_root}/scripts/google_sync.py` |
+=======
+| `weave:sync-google` | `0 4 * * *` | `AGENT_ROOT=~/.hermes/profiles/indigo HOME=/root python3 -u {skill_root}/scripts/google_sync.py` |
+>>>>>>> Stashed changes
 | `weave:enrichability-recalc` | `0 1 * * *` | `python3 {skill_root}/scripts/recalculate_enrichability.py` |
 
 ## ⚠️ CRON INVOCATION: IGNORE THE RUNBOOK IN THE MESSAGE
@@ -221,7 +264,11 @@ On first invocation, `_open_db()` handles auto-initialization. See `references/i
 Specific runbook instructions to IGNORE:
 - "Stop the LadybugDB bridge" → **NOOP** (bridge removed June 2026)
 - "Run enrichment_data.py" → **DOES NOT EXIST** (use WeaveDB queries directly)
+<<<<<<< Updated upstream
 - "Run google_sync.py without AGENT_ROOT" → **WILL FAIL** (must set `AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root`)
+=======
+- "Run google_sync.py without AGENT_ROOT" → **WILL FAIL** (must set `AGENT_ROOT=~/.hermes/profiles/indigo HOME=/root`)
+>>>>>>> Stashed changes
 - "Restart bridge after" → **NOOP** (bridge removed)
 - Any step using `execute_code` → **BLOCKED IN CRON** (use `terminal` + temp file instead)
 
@@ -249,7 +296,11 @@ The WeaveDB schema requires three operations per contact. The `facts` table has 
 
 ```python
 import sys, json, uuid
+<<<<<<< Updated upstream
 sys.path.insert(0, '<hermes-home>/profiles/indigo/skills/ocas-weave/scripts')
+=======
+sys.path.insert(0, '~/.hermes/profiles/indigo/skills/ocas-weave/scripts')
+>>>>>>> Stashed changes
 from weave_sqlite import WeaveDB
 from datetime import datetime, timezone
 
@@ -362,10 +413,17 @@ See `references/enrichment-agent-driven.md` for the full session write-up. Key t
 - **Pre-existing garbage data in persons table**: Some contacts have junk occupation/org values from prior bad enrichment runs (e.g., occupation="Save", org="Riegel", org="New", org="St", org="YouTube", org="PI", org="_VOIS", occupation="gram Manager Big Tech Refuge", org="George", org="Donna Karan New York"). Before enriching, scan for and clear known garbage values so COALESCE doesn't preserve them. Common garbage: single-word orgs that aren't companies ("New", "St", "Early", "Los", "Experienced", "Arsenal", "PI", "Converge", "DockerCon", "YouTube", "George"), non-job occupations ("Save", "All Restaurants", "Short Interest", "Building Manager", "gram Manager Big Tech Refuge"), brand-orgs that aren't the person's employer ("YouTube", "Donna Karan New York"), partial org names ("_VOIS").
 - **Stale `org=Google` from bad enrichment**: Many contacts got `org=Google` from sync metadata or prior enrichment. **Clearing heuristic**: keep `org=Google` only if the person has corroborating data — either an `@google.com` email address OR both occupation AND location_city populated. Without corroboration, set org to NULL. Same heuristic applies to other major tech companies (Microsoft, Salesforce, Amazon) when there's no email match or other data to confirm.
 - **Non-person entries in contacts**: Some "persons" are actually businesses/services (Doordash, Amazon.com, Resy, Visualping, Wealthfront, Harbor View Plaza). Skip these during enrichment — they have business emails (info@, support@) and no individual professional profile.
+<<<<<<< Updated upstream
 - **sys.path must use absolute paths in cron scripts**: When writing batch scripts to `/tmp/`, use `sys.path.insert(0, '<hermes-home>/profiles/indigo/skills/ocas-weave/scripts')` — NOT a relative path like `'scripts'`. The cron working directory is the home dir, not the skill dir. Relative paths cause `ModuleNotFoundError`.
 - **Empty string vs NULL**: The persons table uses both `NULL` and `''` (empty string) for unfilled fields. Your update filter must check BOTH: `if not person.get('occupation')` catches both None and '' in Python. Don't write separate SQL for `IS NULL` and `= ''`.
 - **Duplicate person records**: Some names appear multiple times with different IDs (e.g., two "Abi Jones" records, two "Cameron Moberg" records). Query by name to find all variants and enrich each one. Don't assume ID uniqueness by name. Note: dual-person queries in cron-pipeline-runbook.sql LIMIT 50 may return duplicates that inflate coverage metrics — track by distinct name, not distinct ID, when reporting "both occ+org" counts.
 - **Subagent enrichment writes may hit wrong DB path**: When using `delegate_task` to spawn enrichment subagents, the subagent receives NO context about the correct DB path by default. If the subagent uses `WeaveDB()` (which resolves via `parents[3]`) it lands correctly. But if it uses `sqlite3.connect()` directly or imports via a relative `sys.path.insert(0, 'scripts')`, it may hit `<hermes-home>/commons/db/ocas-weave/weave.sqlite` (stale, 953 persons) instead of `.../profiles/indigo/commons/db/ocas-weave/weave.sqlite` (canonical, 1052 persons). This produces enrichment facts in the wrong DB that are invisible from the canonical one. **Fix**: Always include `canonical_db_path = '<hermes-home>/profiles/indigo/commons/db/ocas-weave/weave.sqlite'` in subagent task context. After subagent completion, verify enrichment facts by ID in the canonical DB.
+=======
+- **sys.path must use absolute paths in cron scripts**: When writing batch scripts to `/tmp/`, use `sys.path.insert(0, '~/.hermes/profiles/indigo/skills/ocas-weave/scripts')` — NOT a relative path like `'scripts'`. The cron working directory is the home dir, not the skill dir. Relative paths cause `ModuleNotFoundError`.
+- **Empty string vs NULL**: The persons table uses both `NULL` and `''` (empty string) for unfilled fields. Your update filter must check BOTH: `if not person.get('occupation')` catches both None and '' in Python. Don't write separate SQL for `IS NULL` and `= ''`.
+- **Duplicate person records**: Some names appear multiple times with different IDs (e.g., two "Abi Jones" records, two "Cameron Moberg" records). Query by name to find all variants and enrich each one. Don't assume ID uniqueness by name. Note: dual-person queries in cron-pipeline-runbook.sql LIMIT 50 may return duplicates that inflate coverage metrics — track by distinct name, not distinct ID, when reporting "both occ+org" counts.
+- **Subagent enrichment writes may hit wrong DB path**: When using `delegate_task` to spawn enrichment subagents, the subagent receives NO context about the correct DB path by default. If the subagent uses `WeaveDB()` (which resolves via `parents[3]`) it lands correctly. But if it uses `sqlite3.connect()` directly or imports via a relative `sys.path.insert(0, 'scripts')`, it may hit `~/.hermes/commons/db/ocas-weave/weave.sqlite` (stale, 953 persons) instead of `.../profiles/indigo/commons/db/ocas-weave/weave.sqlite` (canonical, 1052 persons). This produces enrichment facts in the wrong DB that are invisible from the canonical one. **Fix**: Always include `canonical_db_path = '~/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite'` in subagent task context. After subagent completion, verify enrichment facts by ID in the canonical DB.
+>>>>>>> Stashed changes
 
 ## Support File Map
 
@@ -392,6 +450,8 @@ See `references/enrichment-agent-driven.md` for the full session write-up. Key t
 | `scripts/migrate_ladybugdb_to_sqlite.py` | One-time migration script (already run June 2026) |
 | `scripts/migrate_edges_fk.py` | FK migration: removes incorrect `FOREIGN KEY (target_id)` from edges table. Run once; safe to re-run (idempotent). |
 | `scripts/weave_enrich.py` | Shared enrichment extraction, search, and validation. Contains `searxng_search`, `fetch_page`, `extract_from_content`, `validate_field`, `is_auth_walled`, `build_scout_queries`. Used by both `quick_enrich.py` and `overnight_enrichment.py` — do not duplicate this logic in individual scripts. |
+| `references/discovery-fallback.md` | **When Scout sources are degraded/unavailable** — SearXNG backoff pattern, DuckDuckGo HTML scrape recipe, page-fetch options, and the no-fabrication defer path. Read before any enrichment run where web_search/SearXNG/LinkedIn MCP are suspect. |
+| `scripts/discovery_probe.py` | Run at pipeline start to test which discovery sources are live (SearXNG, DDG, notes on web_search/LinkedIn MCP). Decides proceed / fall back / defer. |
 
 ## Visibility
 

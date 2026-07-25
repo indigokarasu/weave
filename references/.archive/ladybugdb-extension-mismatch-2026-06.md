@@ -25,9 +25,15 @@ Symlink the installed version to the expected path:
 
 ```bash
 # For indigo profile:
+<<<<<<< Updated upstream
 mkdir -p <hermes-home>/profiles/indigo/home/.lbdb/extension/0.15.0/linux_amd64/vector
 ln -sf <hermes-home>/profiles/indigo/home/.lbdb/extension/0.17.0/linux_amd64/vector/libvector.lbug_extension \
       <hermes-home>/profiles/indigo/home/.lbdb/extension/0.15.0/linux_amd64/vector/libvector.lbug_extension
+=======
+mkdir -p ~/.hermes/profiles/indigo/home/.lbdb/extension/0.15.0/linux_amd64/vector
+ln -sf ~/.hermes/profiles/indigo/home/.lbdb/extension/0.17.0/linux_amd64/vector/libvector.lbug_extension \
+      ~/.hermes/profiles/indigo/home/.lbdb/extension/0.15.0/linux_amd64/vector/libvector.lbug_extension
+>>>>>>> Stashed changes
 
 # For default profile:
 mkdir -p <fs-root>/.lbdb/extension/0.15.0/linux_amd64/vector

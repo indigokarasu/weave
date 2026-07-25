@@ -13,7 +13,11 @@ The correct step-by-step runbook for the agent-driven overnight enrichment pipel
 
 ### Step 1: Inbound Google Sync
 ```bash
+<<<<<<< Updated upstream
 cd <hermes-home>/profiles/indigo/skills/ocas-weave && AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root python3 -u scripts/google_sync.py
+=======
+cd ~/.hermes/profiles/indigo/skills/ocas-weave && AGENT_ROOT=~/.hermes/profiles/indigo HOME=/root python3 -u scripts/google_sync.py
+>>>>>>> Stashed changes
 ```
 Expected: ~977 contacts fetched, ~953 upserted, ~24 skipped. Outbound pushes ~587 contacts.
 
@@ -30,11 +34,19 @@ If restart fails, continue with web_search only — do NOT skip enrichment.
 
 **Note on duplicates:** The persons table may have duplicate records for the same real person (e.g., "Abi Jones" ×2, "Cameron Moberg" ×2, "Adam Abouraya" ×2). The SQL below returns one row per ID. When computing coverage metrics, track by distinct **name** not distinct ID — a name appearing once with both fields filled and once empty inflates the "neither" count misleadingly.
 
+<<<<<<< Updated upstream
 **Note on DB sprawl:** If enrichment subagents have been dispatched in prior runs, check for and remove stale DB files before querying. Run: `find <hermes-home> -name "weave.sqlite" -type f | grep -v "profiles/indigo/commons"`. Remove any stale ones.
 
 ```python
 # Via terminal inline Python
 cd <hermes-home>/profiles/indigo/skills/ocas-weave && python3 -c "
+=======
+**Note on DB sprawl:** If enrichment subagents have been dispatched in prior runs, check for and remove stale DB files before querying. Run: `find ~/.hermes -name "weave.sqlite" -type f | grep -v "profiles/indigo/commons"`. Remove any stale ones.
+
+```python
+# Via terminal inline Python
+cd ~/.hermes/profiles/indigo/skills/ocas-weave && python3 -c "
+>>>>>>> Stashed changes
 import sys
 sys.path.insert(0, 'scripts')
 from weave_sqlite import WeaveDB
@@ -90,6 +102,7 @@ Skip rules:
 - Skip contacts where both `occupation` AND `org` are null AND confidence < 0.5
 - Skip unresolvable contacts (common name, no disambiguator)
 - Skip non-person entries (businesses: OpenTable, PayPal, Venmo, Google-as-entity, DJI, etc.)
+- Log every skip (unresolvable + non-person + insufficient-data) to the canonical `decisions.jsonl` at `~/.hermes/profiles/indigo/skills/ocas-weave/decisions.jsonl` using the format in `references/unresolvable-contacts.md`. This path is authoritative — do not write decisions to a different location or they won't be picked up by downstream audits.
 
 ### Step 5: Periodic Google Sync
 After every 10 enriched contacts, run google_sync.py again.
@@ -126,13 +139,17 @@ if r:
 | 0.5-0.59 | Weak inference (possible match, limited data) |
 | <0.5 | Insufficient data — do NOT write |
 
-## Batch Write Pattern
+## Batch Write Pattern (canonical — explicit state-check, NOT COALESCE)
 
-For writing multiple contacts efficiently in a single terminal call:
+Write multiple contacts efficiently in one terminal call. **Do NOT use COALESCE** — see SKILL.md "Enrichment Write Pattern": COALESCE hides "nothing changed" and always writes a redundant fact row. Instead, read current state first, only set NULL/empty fields, write a fact + edge only when something actually changed, and read-back verify every write.
 
 ```python
 import sys, json, uuid
+<<<<<<< Updated upstream
 sys.path.insert(0, '<hermes-home>/profiles/indigo/skills/ocas-weave/scripts')  # ABSOLUTE PATH required in cron/subagent context
+=======
+sys.path.insert(0, '~/.hermes/profiles/indigo/skills/ocas-weave/scripts')  # ABSOLUTE PATH required in cron/subagent context
+>>>>>>> Stashed changes
 from weave_sqlite import WeaveDB
 from datetime import datetime, timezone
 
@@ -146,14 +163,27 @@ contacts = [
 
 for c in contacts:
     person_id = c['id']
-    if not c['occupation'] and not c['org'] and c['confidence'] < 0.5:
+    if not c.get('occupation') and not c.get('org') and c['confidence'] < 0.5:
         continue
+    current = db.execute("SELECT id, name, occupation, org, location_city FROM persons WHERE id = ?", (person_id,))
+    if not current:
+        print(f"SKIP (no person): {person_id}"); continue
+    person = current[0]
+    update_fields, update_vals = [], []
+    if c.get('occupation') and not person.get('occupation'):
+        update_fields.append("occupation = ?"); update_vals.append(c['occupation'])
+    if c.get('org') and not person.get('org'):
+        update_fields.append("org = ?"); update_vals.append(c['org'])
+    if c.get('location_city') and not person.get('location_city'):
+        update_fields.append("location_city = ?"); update_vals.append(c['location_city'])
+    if not update_fields:
+        print(f"SKIP (nothing to update): {person['name']} ({person_id})"); continue
     db.execute_write(
-        'UPDATE persons SET occupation = COALESCE(?, occupation), org = COALESCE(?, org), location_city = COALESCE(?, location_city) WHERE id = ?',
-        (c['occupation'], c['org'], c['location_city'], person_id)
+        f"UPDATE persons SET {', '.join(update_fields)}, record_time = ? WHERE id = ?",
+        tuple(update_vals + [now, person_id])
     )
     fact_id = str(uuid.uuid4())
-    payload = {k: v for k, v in c.items() if k != 'id'}
+    payload = {k: c[k] for k in ('occupation','org','location_city','source_type','source_ref','confidence')}
     db.execute_write(
         'INSERT INTO facts (id, predicate, value, source_type, source_ref, confidence, record_time) VALUES (?, ?, ?, ?, ?, ?, ?)',
         (fact_id, 'enrichment', json.dumps(payload), c['source_type'], c['source_ref'], c['confidence'], now)
@@ -163,7 +193,10 @@ for c in contacts:
         'INSERT INTO edges (id, source_id, target_id, rel_type, source_ref, confidence, record_time) VALUES (?, ?, ?, ?, ?, ?, ?)',
         (edge_id, person_id, fact_id, 'HasFact', c['source_ref'], c['confidence'], now)
     )
-    print(f'Written: {person_id}')
+    # READ-BACK VERIFY (required — see Read-Back Verification section)
+    v = db.execute("SELECT occupation, org, location_city FROM persons WHERE id = ?", (person_id,))[0]
+    ok = all(v.get(k) == c[k] for k in ('occupation','org','location_city') if c.get(k))
+    print(f"{'VERIFIED' if ok else 'WRITE MISMATCH'}: {person['name']} occ={v.get('occupation')} org={v.get('org')} city={v.get('location_city')}")
 ```
 
 ## Timing

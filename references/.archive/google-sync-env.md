@@ -7,17 +7,28 @@
 | Variable | Value | Why |
 |----------|-------|-----|
 | `LBUG_C_API_LIB_PATH` | `/tmp/liblbug.so` | LadybugDB C API shared library (not shipped in wheel) |
+<<<<<<< Updated upstream
 | `AGENT_ROOT` | `<hermes-home>/profiles/indigo` | Profile path where Weave DB lives |
+=======
+| `AGENT_ROOT` | `~/.hermes/profiles/indigo` | Profile path where Weave DB lives |
+>>>>>>> Stashed changes
 | `HOME` | `/root` | Prevents `Path.home()` breakage in cron |
 
 ## Full Command
 
 ```bash
 LBUG_C_API_LIB_PATH=/tmp/liblbug.so \
+<<<<<<< Updated upstream
   AGENT_ROOT=<hermes-home>/profiles/indigo \
   HOME=/root \
   python3 -u \
   <hermes-home>/profiles/indigo/skills/ocas-weave/scripts/google_sync.py
+=======
+  AGENT_ROOT=~/.hermes/profiles/indigo \
+  HOME=/root \
+  python3 -u \
+  ~/.hermes/profiles/indigo/skills/ocas-weave/scripts/google_sync.py
+>>>>>>> Stashed changes
 ```
 
 ## Installing liblbug.so

@@ -2,10 +2,10 @@
 # Refresh the weave visualizer database snapshot
 set -e
 
-WEAVE_DB="<hermes-root>/commons/db/ocas-weave/weave.lbug"
-WEAVE_WAL="<hermes-root>/commons/db/ocas-weave/weave.lbug.wal"
-SNAPSHOT="<hermes-root>/commons/db/ocas-weave/snapshots/weave_viz_copy.lbug"
-SNAPSHOT_WAL="<hermes-root>/commons/db/ocas-weave/snapshots/weave_viz_copy.lbug.wal"
+WEAVE_DB="<hermes-home>/commons/db/ocas-weave/weave.lbug"
+WEAVE_WAL="<hermes-home>/commons/db/ocas-weave/weave.lbug.wal"
+SNAPSHOT="<hermes-home>/commons/db/ocas-weave/snapshots/weave_viz_copy.lbug"
+SNAPSHOT_WAL="<hermes-home>/commons/db/ocas-weave/snapshots/weave_viz_copy.lbug.wal"
 
 # Force kill bridge
 systemctl kill --signal=SIGKILL ladybug-bridge-weave.service 2>/dev/null || true

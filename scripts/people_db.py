@@ -21,7 +21,7 @@ if set(sys.argv[1:]) & _HELP_ARGS:
     sys.exit(0)
 
 
-DEFAULT_DB = "<hermes-home>/commons/db/people/people.db"
+DEFAULT_DB = "<hermes-home>/profiles/<profile>/commons/db/people/people.db"
 
 def _now(): return datetime.now(timezone.utc).isoformat()
 def new_id(): return str(uuid.uuid4())   # opaque, attribute-free

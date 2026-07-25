@@ -3,7 +3,7 @@
 # argparse-based dry-run analysis for Weave contacts
 import sqlite3
 from people_to_google import build_google_payload
-db=sqlite3.connect("<hermes-home>/commons/db/people/people.db"); db.row_factory=sqlite3.Row
+db=sqlite3.connect("<hermes-home>/profiles/<profile>/commons/db/people/people.db"); db.row_factory=sqlite3.Row
 gl=db.execute("SELECT DISTINCT person_id FROM external_refs WHERE system='google'").fetchall()
 from collections import Counter
 stat=Counter(); samples=[]; anomalies=[]

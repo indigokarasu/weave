@@ -17,8 +17,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 # ── Paths ──
-WEAVE_DB = Path("<hermes-root>/commons/db/ocas-weave/weave.lbug")
-WEAVE_DIR = Path("<hermes-root>/commons/db/ocas-weave")
+WEAVE_DB = Path("<hermes-home>/commons/db/ocas-weave/weave.lbug")
+WEAVE_DIR = Path("<hermes-home>/commons/db/ocas-weave")
 SNAPSHOT_DIR = WEAVE_DIR / "snapshots"
 VIZ_SNAPSHOT = SNAPSHOT_DIR / "weave_viz_copy.lbug"
 BRIDGE_SERVICE = "ladybug-bridge-weave.service"

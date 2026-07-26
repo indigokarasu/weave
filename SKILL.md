@@ -59,11 +59,7 @@ Weave maintains a private, provenance-backed social graph of people, relationshi
 
 ## Auth Rule — <operator> Only
 
-<<<<<<< Updated upstream
 **Weave exclusively uses <operator>'s Google auth (`<user-google-email>`).** Never use the agent's account for any Weave operation. The `TOKEN_PATH` in `google_sync.py` is hardcoded to `<user-google-email>.json`. Violation silently fetches wrong contact data.
-=======
-**Weave exclusively uses <operator>'s Google auth (`<user-google-email>`).** Never use the agent's account for any Weave operation. The `TOKEN_PATH` in `google_sync.py` is hardcoded to `<user-google-email>.json`. Violation silently fetches wrong contact data.
->>>>>>> Stashed changes
 
 **ALWAYS sync Contacts after changes** via `scripts/google_sync.py`. This is the canonical sync path — never skip it after a contact mutation.
 
@@ -145,13 +141,8 @@ Every written fact requires: `source_type` (direct / inferred / imported / user-
 2. Check SearXNG health
 2.5. **Probe ALL discovery sources before committing to the run**: `python3 scripts/discovery_probe.py`. If every source reports down (web_search empty, SearXNG engines suspended, DDG anomaly-blocked, no LinkedIn MCP), do NOT start per-contact processing — follow the **Discovery Source Availability & No-Fabrication Rule** (defer real people, skip non-persons/unresolvables, write no facts). If ≥1 source is live, proceed with the fallback chain in `references/discovery-fallback.md`.
 3. **Clear pre-existing garbage** — scan for known junk values before enriching so COALESCE preserves nothing
-<<<<<<< Updated upstream
 4. placeholder — the `parents[2]` path bug in scripts can create stale DB files at `<hermes-home>/commons/db/ocas-weave/weave.sqlite`, `<hermes-home>/profiles/commons/db/ocas-weave/weave.sqlite`, and `<hermes-home>/profiles/indigo/skills/commons/db/ocas-weave/weave.sqlite`. Only the canonical path (`<hermes-home>/profiles/indigo/commons/db/ocas-weave/weave.sqlite`) is correct. Stale DBs confuse subagent enrichment writes. Remove them before enriching.
 5. **Check edges FK constraint** — run `python3 -c "import sqlite3; c=sqlite3.connect('<hermes-home>/profiles/indigo/commons/db/ocas-weave/weave.sqlite'); r=c.execute('PRAGMA foreign_key_list(edges)').fetchall(); print(r)"`. If `target_id` references `persons(id)`, run `python3 scripts/migrate_edges_fk.py` before enriching. The `target_id` column is polymorphic (can point to `facts.id` or `preferences.id`) — a wrong FK causes `HasFact` edge inserts to fail silently.
-=======
-4. placeholder — the `parents[2]` path bug in scripts can create stale DB files at `~/.hermes/commons/db/ocas-weave/weave.sqlite`, `~/.hermes/profiles/commons/db/ocas-weave/weave.sqlite`, and `~/.hermes/profiles/indigo/skills/commons/db/ocas-weave/weave.sqlite`. Only the canonical path (`~/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite`) is correct. Stale DBs confuse subagent enrichment writes. Remove them before enriching.
-5. **Check edges FK constraint** — run `python3 -c "import sqlite3; c=sqlite3.connect('~/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite'); r=c.execute('PRAGMA foreign_key_list(edges)').fetchall(); print(r)"`. If `target_id` references `persons(id)`, run `python3 scripts/migrate_edges_fk.py` before enriching. The `target_id` column is polymorphic (can point to `facts.id` or `preferences.id`) — a wrong FK causes `HasFact` edge inserts to fail silently.
->>>>>>> Stashed changes
 6. Query contacts with gaps
 7. Process each contact through Scout → Sift → Sherlock → Write
 8. Run periodic Google sync after every 10 enriched contacts
@@ -250,11 +241,7 @@ On first invocation, `_open_db()` handles auto-initialization. See `references/i
 | Job name | Schedule | Command |
 |---|---|---|
 | `weave:update` | `0 0 * * *` | `weave.update` |
-<<<<<<< Updated upstream
 | `weave:sync-google` | `0 4 * * *` | `AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root python3 -u {skill_root}/scripts/google_sync.py` |
-=======
-| `weave:sync-google` | `0 4 * * *` | `AGENT_ROOT=~/.hermes/profiles/indigo HOME=/root python3 -u {skill_root}/scripts/google_sync.py` |
->>>>>>> Stashed changes
 | `weave:enrichability-recalc` | `0 1 * * *` | `python3 {skill_root}/scripts/recalculate_enrichability.py` |
 
 ## ⚠️ CRON INVOCATION: IGNORE THE RUNBOOK IN THE MESSAGE
@@ -264,11 +251,7 @@ On first invocation, `_open_db()` handles auto-initialization. See `references/i
 Specific runbook instructions to IGNORE:
 - "Stop the LadybugDB bridge" → **NOOP** (bridge removed June 2026)
 - "Run enrichment_data.py" → **DOES NOT EXIST** (use WeaveDB queries directly)
-<<<<<<< Updated upstream
 - "Run google_sync.py without AGENT_ROOT" → **WILL FAIL** (must set `AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root`)
-=======
-- "Run google_sync.py without AGENT_ROOT" → **WILL FAIL** (must set `AGENT_ROOT=~/.hermes/profiles/indigo HOME=/root`)
->>>>>>> Stashed changes
 - "Restart bridge after" → **NOOP** (bridge removed)
 - Any step using `execute_code` → **BLOCKED IN CRON** (use `terminal` + temp file instead)
 
@@ -296,11 +279,7 @@ The WeaveDB schema requires three operations per contact. The `facts` table has 
 
 ```python
 import sys, json, uuid
-<<<<<<< Updated upstream
 sys.path.insert(0, '<hermes-home>/profiles/indigo/skills/ocas-weave/scripts')
-=======
-sys.path.insert(0, '~/.hermes/profiles/indigo/skills/ocas-weave/scripts')
->>>>>>> Stashed changes
 from weave_sqlite import WeaveDB
 from datetime import datetime, timezone
 
@@ -413,17 +392,10 @@ See `references/enrichment-agent-driven.md` for the full session write-up. Key t
 - **Pre-existing garbage data in persons table**: Some contacts have junk occupation/org values from prior bad enrichment runs (e.g., occupation="Save", org="Riegel", org="New", org="St", org="YouTube", org="PI", org="_VOIS", occupation="gram Manager Big Tech Refuge", org="George", org="Donna Karan New York"). Before enriching, scan for and clear known garbage values so COALESCE doesn't preserve them. Common garbage: single-word orgs that aren't companies ("New", "St", "Early", "Los", "Experienced", "Arsenal", "PI", "Converge", "DockerCon", "YouTube", "George"), non-job occupations ("Save", "All Restaurants", "Short Interest", "Building Manager", "gram Manager Big Tech Refuge"), brand-orgs that aren't the person's employer ("YouTube", "Donna Karan New York"), partial org names ("_VOIS").
 - **Stale `org=Google` from bad enrichment**: Many contacts got `org=Google` from sync metadata or prior enrichment. **Clearing heuristic**: keep `org=Google` only if the person has corroborating data — either an `@google.com` email address OR both occupation AND location_city populated. Without corroboration, set org to NULL. Same heuristic applies to other major tech companies (Microsoft, Salesforce, Amazon) when there's no email match or other data to confirm.
 - **Non-person entries in contacts**: Some "persons" are actually businesses/services (Doordash, Amazon.com, Resy, Visualping, Wealthfront, Harbor View Plaza). Skip these during enrichment — they have business emails (info@, support@) and no individual professional profile.
-<<<<<<< Updated upstream
 - **sys.path must use absolute paths in cron scripts**: When writing batch scripts to `/tmp/`, use `sys.path.insert(0, '<hermes-home>/profiles/indigo/skills/ocas-weave/scripts')` — NOT a relative path like `'scripts'`. The cron working directory is the home dir, not the skill dir. Relative paths cause `ModuleNotFoundError`.
 - **Empty string vs NULL**: The persons table uses both `NULL` and `''` (empty string) for unfilled fields. Your update filter must check BOTH: `if not person.get('occupation')` catches both None and '' in Python. Don't write separate SQL for `IS NULL` and `= ''`.
 - **Duplicate person records**: Some names appear multiple times with different IDs (e.g., two "Abi Jones" records, two "Cameron Moberg" records). Query by name to find all variants and enrich each one. Don't assume ID uniqueness by name. Note: dual-person queries in cron-pipeline-runbook.sql LIMIT 50 may return duplicates that inflate coverage metrics — track by distinct name, not distinct ID, when reporting "both occ+org" counts.
 - **Subagent enrichment writes may hit wrong DB path**: When using `delegate_task` to spawn enrichment subagents, the subagent receives NO context about the correct DB path by default. If the subagent uses `WeaveDB()` (which resolves via `parents[3]`) it lands correctly. But if it uses `sqlite3.connect()` directly or imports via a relative `sys.path.insert(0, 'scripts')`, it may hit `<hermes-home>/commons/db/ocas-weave/weave.sqlite` (stale, 953 persons) instead of `.../profiles/indigo/commons/db/ocas-weave/weave.sqlite` (canonical, 1052 persons). This produces enrichment facts in the wrong DB that are invisible from the canonical one. **Fix**: Always include `canonical_db_path = '<hermes-home>/profiles/indigo/commons/db/ocas-weave/weave.sqlite'` in subagent task context. After subagent completion, verify enrichment facts by ID in the canonical DB.
-=======
-- **sys.path must use absolute paths in cron scripts**: When writing batch scripts to `/tmp/`, use `sys.path.insert(0, '~/.hermes/profiles/indigo/skills/ocas-weave/scripts')` — NOT a relative path like `'scripts'`. The cron working directory is the home dir, not the skill dir. Relative paths cause `ModuleNotFoundError`.
-- **Empty string vs NULL**: The persons table uses both `NULL` and `''` (empty string) for unfilled fields. Your update filter must check BOTH: `if not person.get('occupation')` catches both None and '' in Python. Don't write separate SQL for `IS NULL` and `= ''`.
-- **Duplicate person records**: Some names appear multiple times with different IDs (e.g., two "Abi Jones" records, two "Cameron Moberg" records). Query by name to find all variants and enrich each one. Don't assume ID uniqueness by name. Note: dual-person queries in cron-pipeline-runbook.sql LIMIT 50 may return duplicates that inflate coverage metrics — track by distinct name, not distinct ID, when reporting "both occ+org" counts.
-- **Subagent enrichment writes may hit wrong DB path**: When using `delegate_task` to spawn enrichment subagents, the subagent receives NO context about the correct DB path by default. If the subagent uses `WeaveDB()` (which resolves via `parents[3]`) it lands correctly. But if it uses `sqlite3.connect()` directly or imports via a relative `sys.path.insert(0, 'scripts')`, it may hit `~/.hermes/commons/db/ocas-weave/weave.sqlite` (stale, 953 persons) instead of `.../profiles/indigo/commons/db/ocas-weave/weave.sqlite` (canonical, 1052 persons). This produces enrichment facts in the wrong DB that are invisible from the canonical one. **Fix**: Always include `canonical_db_path = '~/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite'` in subagent task context. After subagent completion, verify enrichment facts by ID in the canonical DB.
->>>>>>> Stashed changes
 
 ## Support File Map
 

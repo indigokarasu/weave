@@ -3,11 +3,7 @@
 ## Symptoms
 
 - `google_sync.py` or `contact_snapshots.py` fails with `FileNotFoundError` for a path that looks like `<fs-root>/...json` or `<fs-root>/...entials/<user-google-email>.json`
-<<<<<<< Updated upstream
 - `TOKEN_PATH` line in the script is shorter than ~80 bytes (the correct line is 80 bytes for <operator>'s path)
-=======
-- `TOKEN_PATH` line in the script is shorter than ~80 bytes (the correct line is 80 bytes for <operator>'s path)
->>>>>>> Stashed changes
 - Script appears to run but fetches 0 or 1 contacts (wrong account — token points to a different user)
 - Hexdump of the script shows truncated or garbled path bytes
 
@@ -44,11 +40,7 @@ idx = c.find(b'TOKEN_PATH')
 end = c.find(b'\n', idx)
 line = c[idx:end]
 print(f'Length: {len(line)} bytes')
-<<<<<<< Updated upstream
-print(f'Has <account-identity>: {b\"<account-identity>\" in line}')
-=======
 print(f'Has <user-handle>: {b\"<user-handle>\" in line}')
->>>>>>> Stashed changes
 print(f'Has gmail.com.json: {b\"gmail.com.json\" in line}')
 "
 

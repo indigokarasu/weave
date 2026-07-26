@@ -6,11 +6,7 @@ The exact SQLite write sequence for agent-driven enrichment. The `facts` table h
 
 ```python
 import sys, json, uuid
-<<<<<<< Updated upstream
 sys.path.insert(0, '<hermes-home>/profiles/indigo/skills/ocas-weave/scripts')  # ABSOLUTE PATH — relative 'scripts' breaks in subagent/cron context
-=======
-sys.path.insert(0, '~/.hermes/profiles/indigo/skills/ocas-weave/scripts')  # ABSOLUTE PATH — relative 'scripts' breaks in subagent/cron context
->>>>>>> Stashed changes
 from weave_sqlite import WeaveDB
 from datetime import datetime, timezone
 
@@ -69,11 +65,7 @@ For batch processing (e.g., 50 contacts per run), load JSON from stdin:
 
 ```python
 import sys, json, uuid
-<<<<<<< Updated upstream
 sys.path.insert(0, '<hermes-home>/profiles/indigo/skills/ocas-weave/scripts')  # ABSOLUTE PATH — not 'scripts' which breaks in subagent/cron context
-=======
-sys.path.insert(0, '~/.hermes/profiles/indigo/skills/ocas-weave/scripts')  # ABSOLUTE PATH — not 'scripts' which breaks in subagent/cron context
->>>>>>> Stashed changes
 from weave_sqlite import WeaveDB
 from datetime import datetime, timezone
 
@@ -98,11 +90,7 @@ Run via: `python3 -c "..." < /tmp/batch.json` or `python3 /tmp/script.py < /tmp/
 `execute_code` is **BLOCKED** in cron jobs. Use `terminal` with inline Python:
 
 ```bash
-<<<<<<< Updated upstream
 cd <hermes-home>/profiles/indigo/skills/ocas-weave && python3 -c "
-=======
-cd ~/.hermes/profiles/indigo/skills/ocas-weave && python3 -c "
->>>>>>> Stashed changes
 import sys, json, uuid
 sys.path.insert(0, 'scripts')
 from weave_sqlite import WeaveDB
@@ -133,8 +121,4 @@ for name in verify_names:
 4. **Not generating UUIDs for fact and edge IDs** — they need PKs too.
 5. **Writing contacts with no data** — skip if both occupation AND org are null with confidence < 0.5.
 6. **Tuple indexing on execute() results** — `db.execute()` returns `list[dict]`, not `list[tuple]`. Use `r[0]['column_name']`, NOT `r[0][0]`. The latter raises `KeyError: 0` and looks like a data error but is actually a code pattern error.
-<<<<<<< Updated upstream
 7. **Subagent enrichment to wrong DB** — when using `delegate_task` for enrichment subagents, the subagent may connect to a stale DB at `<hermes-home>/commons/db/ocas-weave/weave.sqlite` (953 persons) instead of the canonical `<hermes-home>/profiles/indigo/commons/db/ocas-weave/weave.sqlite` (1052 persons). Symptoms: subagent reports writes successful but verification shows empty fields. **Fix**: always include `target_db_path = '<hermes-home>/profiles/indigo/commons/db/ocas-weave/weave.sqlite'` in subagent context. If using `WeaveDB()` (which uses `parents[3]` auto-resolution), the correct path is used; raw `sqlite3.connect()` calls must hardcode the canonical path.
-=======
-7. **Subagent enrichment to wrong DB** — when using `delegate_task` for enrichment subagents, the subagent may connect to a stale DB at `~/.hermes/commons/db/ocas-weave/weave.sqlite` (953 persons) instead of the canonical `~/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite` (1052 persons). Symptoms: subagent reports writes successful but verification shows empty fields. **Fix**: always include `target_db_path = '~/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite'` in subagent context. If using `WeaveDB()` (which uses `parents[3]` auto-resolution), the correct path is used; raw `sqlite3.connect()` calls must hardcode the canonical path.
->>>>>>> Stashed changes

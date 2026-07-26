@@ -13,11 +13,7 @@ The correct step-by-step runbook for the agent-driven overnight enrichment pipel
 
 ### Step 1: Inbound Google Sync
 ```bash
-<<<<<<< Updated upstream
 cd <hermes-home>/profiles/indigo/skills/ocas-weave && AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root python3 -u scripts/google_sync.py
-=======
-cd ~/.hermes/profiles/indigo/skills/ocas-weave && AGENT_ROOT=~/.hermes/profiles/indigo HOME=/root python3 -u scripts/google_sync.py
->>>>>>> Stashed changes
 ```
 Expected: ~977 contacts fetched, ~953 upserted, ~24 skipped. Outbound pushes ~587 contacts.
 
@@ -34,19 +30,11 @@ If restart fails, continue with web_search only — do NOT skip enrichment.
 
 **Note on duplicates:** The persons table may have duplicate records for the same real person (e.g., "Abi Jones" ×2, "Cameron Moberg" ×2, "Adam Abouraya" ×2). The SQL below returns one row per ID. When computing coverage metrics, track by distinct **name** not distinct ID — a name appearing once with both fields filled and once empty inflates the "neither" count misleadingly.
 
-<<<<<<< Updated upstream
 **Note on DB sprawl:** If enrichment subagents have been dispatched in prior runs, check for and remove stale DB files before querying. Run: `find <hermes-home> -name "weave.sqlite" -type f | grep -v "profiles/indigo/commons"`. Remove any stale ones.
 
 ```python
 # Via terminal inline Python
 cd <hermes-home>/profiles/indigo/skills/ocas-weave && python3 -c "
-=======
-**Note on DB sprawl:** If enrichment subagents have been dispatched in prior runs, check for and remove stale DB files before querying. Run: `find ~/.hermes -name "weave.sqlite" -type f | grep -v "profiles/indigo/commons"`. Remove any stale ones.
-
-```python
-# Via terminal inline Python
-cd ~/.hermes/profiles/indigo/skills/ocas-weave && python3 -c "
->>>>>>> Stashed changes
 import sys
 sys.path.insert(0, 'scripts')
 from weave_sqlite import WeaveDB
@@ -145,11 +133,7 @@ Write multiple contacts efficiently in one terminal call. **Do NOT use COALESCE*
 
 ```python
 import sys, json, uuid
-<<<<<<< Updated upstream
 sys.path.insert(0, '<hermes-home>/profiles/indigo/skills/ocas-weave/scripts')  # ABSOLUTE PATH required in cron/subagent context
-=======
-sys.path.insert(0, '~/.hermes/profiles/indigo/skills/ocas-weave/scripts')  # ABSOLUTE PATH required in cron/subagent context
->>>>>>> Stashed changes
 from weave_sqlite import WeaveDB
 from datetime import datetime, timezone
 

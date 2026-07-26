@@ -32,11 +32,7 @@ Field map (Google → Weave):
 
 Inbound sync uses `google_sync.py` which handles pagination, matching (by resource name → email → phone), and gap-fill. Outbound sync pushes modified contacts via `BatchUpdateContacts` API.
 
-<<<<<<< Updated upstream
 Run: `AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root python3 {skill_root}/scripts/google_sync.py`
-=======
-Run: `AGENT_ROOT=~/.hermes/profiles/indigo HOME=/root python3 {skill_root}/scripts/google_sync.py`
->>>>>>> Stashed changes
 
 ## Google People API — Operational Learnings (Apr 2026, updated Jun 2026)
 

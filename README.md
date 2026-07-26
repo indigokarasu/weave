@@ -8,11 +8,7 @@ Private provenance-backed social graph. Maintains queryable records of people, r
 **Version:** 4.3.0
 **Type:** 
 **Layer:** data-science
-<<<<<<< Updated upstream
-**Author:** Indigo Karasu
-=======
 **Author:** <agent-name>
->>>>>>> Stashed changes
 
 ---
 

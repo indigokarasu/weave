@@ -26,11 +26,7 @@ Writing a Python script to `/tmp/weave_batch_enrich_vN.py` and running with `pyt
 The invocation message contained a hardcoded runbook referencing `enrichment_data.py` and `systemctl stop ladybug-bridge-weave.service` — both removed. I caught this from the skill's own docs but wasted a tool call on the bridge stop before realizing. **Fix**: Added top-level "CRON INVOCATION" section to skill.
 
 ### google_sync.py requires AGENT_ROOT env var
-<<<<<<< Updated upstream
 Running `python3 google_sync.py` without `AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root` fails with `FileNotFoundError` for config.json. The skill's background tasks table shows the correct invocation, but the runbook didn't include it.
-=======
-Running `python3 google_sync.py` without `AGENT_ROOT=~/.hermes/profiles/indigo HOME=/root` fails with `FileNotFoundError` for config.json. The skill's background tasks table shows the correct invocation, but the runbook didn't include it.
->>>>>>> Stashed changes
 
 ### Subagent ID mismatch
 Subagents sometimes used different person IDs than expected (e.g., Cameron Moberg had two records: `8d3db255` and `41753824`). Both needed enrichment. Always query by name to find all variants.

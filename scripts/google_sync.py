@@ -197,6 +197,80 @@ def sync_inbound(token):
             "inbound_websites_filled": url_stats.get("website_filled", 0)}
 
 
+
+MAX_CREATES_PER_RUN = 25  # bound the blast radius of any one sync
+
+
+def _norm_name(s):
+    """Diacritic- and punctuation-insensitive name key for dedupe."""
+    import unicodedata as _ud
+    if not s:
+        return ""
+    s = _ud.normalize("NFKD", s)
+    s = "".join(c for c in s if not _ud.combining(c))
+    return " ".join(_re.sub(r"[^A-Za-z ]", " ", s).upper().split())
+
+
+def _google_name_email_index(token):
+    """(normalized names, lowercased emails) currently in Google Contacts."""
+    names, emails = set(), set()
+    page = None
+    while True:
+        q = {"personFields": "names,emailAddresses", "pageSize": 1000,
+             "sources": "READ_SOURCE_TYPE_CONTACT"}
+        if page:
+            q["pageToken"] = page
+        try:
+            req = urllib.request.Request(
+                f"{PEOPLE_API_BASE}/people/me/connections?" + urllib.parse.urlencode(q),
+                headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                d = json.loads(resp.read())
+        except Exception as e:
+            _log(f"  Outbound: dedupe index fetch failed ({str(e)[:60]}); "
+                 f"refusing to create this run")
+            return None, None
+        for p in d.get("connections", []):
+            for n in (p.get("names") or []):
+                if n.get("displayName"):
+                    names.add(_norm_name(n["displayName"]))
+            for e in (p.get("emailAddresses") or []):
+                if e.get("value"):
+                    emails.add(e["value"].strip().lower())
+        page = d.get("nextPageToken")
+        if not page:
+            break
+    return names, emails
+
+
+
+# Fields whose value may have been written by enrichment rather than by the
+# owner. Enrichment lives in weave; Google Contacts is the owner's own record,
+# so an inferred value must never overwrite it there.
+INFERRED_SOURCE_TYPES = ("scout_osint", "scout_research", "web_enrichment",
+                         "inferred", "enriched")
+GATED_FIELDS = ("org", "occupation", "location_city", "location_country")
+
+
+def _inferred_field_values(weave):
+    """{person_id: {field: {values...}}} for values sourced from enrichment.
+
+    A persons column matching one of these values was populated by inference,
+    so it is withheld from the outbound push.
+    """
+    out = {}
+    q = ",".join("?" * len(INFERRED_SOURCE_TYPES))
+    rows = weave.execute(
+        "SELECT e.source_id AS pid, f.predicate, f.value FROM facts f "
+        "JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact' "
+        f"WHERE f.source_type IN ({q}) AND f.predicate IN "
+        "('org','occupation','location_city','location_country')",
+        tuple(INFERRED_SOURCE_TYPES))
+    for r in rows:
+        out.setdefault(r["pid"], {}).setdefault(r["predicate"], set()).add(r["value"])
+    return out
+
+
 def sync_outbound(token, last_sync_at):
     """Push Weave changes TO Google Contacts via REST API + SQLite backend."""
     sys.path.insert(0, str(Path(__file__).parent))
@@ -237,8 +311,56 @@ def sync_outbound(token, last_sync_at):
     """, {"ts": last_sync_at})
 
     to_update = [r for r in rows if r["google_resource_name"]]
-    to_create = [r for r in rows if not r["google_resource_name"]]
-    _log(f"  Outbound: {len(to_update)} contacts to update, {len(to_create)} contacts to create")
+    # NEVER create Google contacts. Weave holds person rows that are not
+    # address-book entries — entities discovered by chronicle_sync, email
+    # analysis and inference. Pushing those would invent contacts the user
+    # never added. Outbound is enrichment of EXISTING contacts only; a row
+    # without a google_resource_name is reported and skipped.
+    # Contacts present in weave but absent from Google. Deliberately NOT
+    # time-bounded and not restricted by source_type: a contact missing from
+    # Google stays missing until created, however old the row is. The
+    # exclusions are policy, not incidental:
+    #   is_pseudo   - relations and BOOK entries are never their own contact
+    #   is_archived - deliberately retired
+    #   is_deceased - never recreate a contact the owner removed
+    create_rows = weave.execute("""
+        SELECT google_resource_name, name_given, name_family,
+               email, phone, org, occupation, location_city, location_country,
+               id, name
+        FROM persons
+        WHERE (google_resource_name IS NULL OR google_resource_name = '')
+          AND COALESCE(is_pseudo, 0) = 0
+          AND COALESCE(is_archived, 0) = 0
+          AND COALESCE(is_deceased, 0) = 0
+    """)
+
+    # Dedupe against live Google before creating: weave rows have been seen to
+    # exist in Google under a name the id-based scan missed, and a duplicate in
+    # the user's real address book is much worse than a skipped create.
+    inferred_map = _inferred_field_values(weave)
+    gated_total = 0
+    g_names, g_emails = _google_name_email_index(token)
+    to_create, dup_skipped = [], 0
+    if g_names is None:
+        create_rows = []   # no index -> create nothing rather than risk duplicates
+    for r in create_rows:
+        em = (r["email"] or "").strip().lower()
+        if em and em in g_emails:
+            dup_skipped += 1
+            continue
+        if _norm_name(r["name"] or "") in g_names:
+            dup_skipped += 1
+            continue
+        to_create.append(r)
+    if dup_skipped:
+        _log(f"  Outbound: {dup_skipped} create candidate(s) skipped — already in Google")
+    if len(to_create) > MAX_CREATES_PER_RUN:
+        _log(f"  Outbound: capping creates at {MAX_CREATES_PER_RUN} "
+             f"(of {len(to_create)}); the rest follow next run")
+        to_create = to_create[:MAX_CREATES_PER_RUN]
+    _log(f"  Outbound: {len(to_update)} contacts to update, {len(to_create)} to create")
+    _log(f"  Outbound: {sum(len(v) for v in inferred_map.values())} enrichment-derived "
+         f"value(s) known; these are withheld from the push")
 
     if not to_update and not to_create:
         return {"outbound_pushed": 0, "outbound_failed": 0, "outbound_skipped": 0, "outbound_stale": 0, "outbound_rate_limited": 0, "outbound_created": 0}
@@ -283,6 +405,14 @@ def sync_outbound(token, last_sync_at):
         return body
 
     for r in to_update:
+        # Withhold enrichment-derived values from the push (owner data only).
+        _inf = inferred_map.get(r["id"], {})
+        if _inf:
+            r = dict(r)
+            for _f in GATED_FIELDS:
+                if r.get(_f) and r[_f] in _inf.get(_f, ()):
+                    r[_f] = ""
+                    gated_total += 1
         body = build_contact_body(
             r["google_resource_name"], r["name_given"], r["name_family"],
             r["email"], r["phone"], r["org"], r["occupation"],

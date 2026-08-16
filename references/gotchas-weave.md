@@ -39,7 +39,7 @@
 ## Contact Management
 
 - **Person merge is never automatic**: Weave never silently collapses two Person nodes. Always confirm identity before merging; match by `google_resource_name`, email, or phone — never by name alone.
-- **Outbound sync is doubly gated**: Both the config writeback flag AND per-sync user approval are required.
+- **Outbound sync is on by default**, gated by the config writeback flag. The protection is in *what* is pushed: enrichment-derived field values are withheld, and pseudo-contacts, archived and deceased records are never created in Google. A missing `staging/` directory will fail every checkpoint write and take the batch down with it — ensure it exists.
 - **Contact merge reported by user but absent in Weave DB**: If Weave shows separate records, the merge is in Google Contacts, not Weave.
 
 ## SQLite Quirks

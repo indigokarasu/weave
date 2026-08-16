@@ -10,7 +10,7 @@
 | Single generic words | "Professional", "Employees", "Newsletter", "Joy" | Not a company |
 | Sentence fragments | "Leading Organizations Across the World of Open" | Verbose fragment |
 | Lowercase single words | "per", "new", "updates" | Not a proper noun |
-| Person's own name | "Sharon" for contact "Sharon McQueen" | Name echo |
+| Person's own name | "Sharon" for contact "Contact A" | Name echo |
 | Email-like values | "leaflet@1.9.4" | Junk data |
 
 ### Occupation Values — Reject These Patterns
@@ -26,7 +26,7 @@
 
 | Pattern | Example | Why It's Wrong |
 |---------|---------|----------------|
-| Doesn't belong to person | contact@example.com for Jenny Shears | Clearly not hers |
+| Doesn't belong to person | contact@example.com for Contact B | Clearly not hers |
 | Junk domains | "leaflet@1.9.4" | Bot-generated |
 
 ## Validation Rules Applied (weave_enrich.py validate_field)

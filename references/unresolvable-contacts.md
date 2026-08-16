@@ -6,7 +6,7 @@ When processing contacts through the enrichment pipeline, some contacts cannot b
 
 A contact is **unresolvable** when ANY of these conditions apply:
 
-1. **Common name + no disambiguating data**: Name like "Phil Baker", "Ben Brown", "Lydia Baker", "Ben Badiei" with no email, phone, or location. web_search returns 1000+ profiles with no way to identify the correct one.
+1. **Common name + no disambiguating data**: Name like "Contact A", "Contact C", "Contact B", "Contact D" with no email, phone, or location. web_search returns 1000+ profiles with no way to identify the correct one.
 
 2. **No last name**: "Davy", "Laurent", "Cedric" — single names that appear in thousands of LinkedIn profiles.
 
@@ -38,7 +38,7 @@ Don't delete or flag permanently. Just skip this run and re-check next run.
 
 These are businesses/services that entered Google Contacts as people. Skip them every run:
 
-- Doordash, Amazon.com, Resy, Visualping, Wealthfront, Harbor View Plaza
+- Doordash, Amazon.com, Resy, Visualping, Wealthfront, Harborworks Studio
 - OpenTable, PayPal, Venmo, Google (as a person entry), DJI
 - Any contact whose email is info@, support@, hello@, no-reply@
 

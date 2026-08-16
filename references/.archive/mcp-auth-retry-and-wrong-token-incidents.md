@@ -23,7 +23,7 @@
 
 **Incident**: The overnight enrichment pipeline's Google sync ran with the agent's OAuth token instead of <operator>'s (<operator>'s token was expired since May 7). Evidence log entry: `"google_sync": "completed_with_indigo_token"`.
 
-**Symptom reported by user**: "Zhenshuo Fang got merged with Karl Lindekugel" — visible in Google Contacts UI but NOT in Weave DB.
+**Symptom reported by user**: "Contact A got merged with Contact B" — visible in Google Contacts UI but NOT in Weave DB.
 
 **Root cause**: When `google_sync.py` runs with wrong account credentials, it can:
 - Create contacts in the wrong Google account
@@ -31,9 +31,9 @@
 - Merge distinct contacts if the matching logic finds a false positive
 
 **Weave DB state**: All three records were separate:
-- Karl Lindekugel IV — Merrill Lynch, `people/c3547945627458424429`
-- Karl Lindekugel (CFO) — Eccotemp Systems, no Google resource name
-- Zhenshuo Fang — Xiaomi, `people/c7279332960451507149`
+- Contact B IV — Merrill Lynch, `people/c3547945627458424429`
+- Contact B (CFO) — Eccotemp Systems, no Google resource name
+- Contact A — Xiaomi, `people/c7279332960451507149`
 
 **Fix required**:
 1. Get valid Google OAuth for <operator> (re-authorize via MCP auth URL)

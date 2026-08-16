@@ -2,7 +2,7 @@
 """
 Bidirectional Google Contacts sync for Weave — SQLite backend edition.
 
-Uses weave_sqlite.WeaveDB instead of LadybugDB. WAL mode allows concurrent
+Uses weave_sqlite.WeaveDB instead of SQLite. WAL mode allows concurrent
 access from multiple cron jobs and interactive sessions.
 
 Inbound:  Google Contacts → Weave (SQLite)
@@ -174,7 +174,27 @@ def sync_inbound(token):
         if upserted % 100 == 0:
             _log(f"  Inbound progress: {upserted}/{len(contacts)} processed")
 
-    return {"inbound_upserted": upserted, "inbound_enriched": enriched, "inbound_created": created, "inbound_skipped": skipped}
+    # Hand-entered urls/biographies are requested in person_fields above but the
+    # upsert loop only maps scalar columns, so they were fetched and discarded on
+    # every sync — 158 curated LinkedIn URLs never reached weave. They are the
+    # strongest identity signal in a contact (user-typed, not inferred), so they
+    # are imported here as additive facts. Never fatal: a failure must not lose
+    # the contact sync that already succeeded.
+    url_stats = {}
+    try:
+        from contact_urls import import_all as _import_contact_urls
+        url_stats = _import_contact_urls(contacts, SQLITE_DB)
+        _log(f"  Inbound URLs: +{url_stats.get('written', 0)} facts "
+             f"({url_stats.get('existing', 0)} already present), "
+             f"{url_stats.get('website_filled', 0)} website columns filled")
+    except Exception as e:
+        _log(f"  Inbound URLs: import failed ({type(e).__name__}: {e}); "
+             f"contact sync unaffected")
+
+    return {"inbound_upserted": upserted, "inbound_enriched": enriched,
+            "inbound_created": created, "inbound_skipped": skipped,
+            "inbound_url_facts": url_stats.get("written", 0),
+            "inbound_websites_filled": url_stats.get("website_filled", 0)}
 
 
 def sync_outbound(token, last_sync_at):

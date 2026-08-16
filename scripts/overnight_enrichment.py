@@ -25,18 +25,18 @@ PROGRESS_FILE = str(AGENT_ROOT / "data/weave-enrichment/progress.jsonl")
 STATS_FILE = str(AGENT_ROOT / "data/weave-enrichment/stats.json")
 
 # Pipeline config
-SEARCH_DELAY = 3        # Seconds between searches
+SEARCH_DELAY = 3        # Seconds between searches (legacy; unused by scout path)
+SCOUT_TOP_SITES = 300   # maigret site breadth per contact (speed vs coverage)
 SYNC_EVERY = 30         # Sync to Google after this many enriched contacts
 DEADLINE_HOUR_ET = 8    # Stop at 8am ET
 MIN_CONFIDENCE = 0.7
+RETRY_FAILED_DAYS = 30      # nothing found: try again in a month (new accounts appear)
+REFRESH_ENRICHED_DAYS = 90  # data found: re-verify quarterly (jobs and cities change)
 
 # Shared enrichment logic
 sys.path.insert(0, str(Path(__file__).parent))
 from weave_enrich import (
-    searxng_search, fetch_page, extract_from_content,
-    validate_field, is_auth_walled,
-    build_scout_queries, SEARXNG_URL, JINA_BASE,
-    log, sift_extract_from_pages, enrich_weave_contact,
+    log, scout_research_contact, store_scout_findings,
 )
 
 _HELP_ARGS = {"--help", "-h"}
@@ -66,8 +66,24 @@ def get_contacts_needing_enrichment():
             OR (location_city IS NULL OR location_city = '')
             OR (email IS NULL OR email = '')
             OR (phone IS NULL OR phone = ''))
-          AND NOT (org IS NOT NULL AND org != '' AND occupation IS NOT NULL AND occupation != '')
-        ORDER BY record_time DESC
+        -- Richer contacts first: every known field is an identity anchor for the
+        -- scout queries and the LLM gate, so data-rich contacts are the LIKELIEST
+        -- to match well -- the opposite of the old behavior, which skipped them.
+        -- ...but only where search can pay off: a contact whose ONLY gap is
+        -- phone has nothing the public web reliably provides, so those sort
+        -- last (still one attempt each, never skipped).
+        ORDER BY ((org IS NULL OR org = '')
+                OR (occupation IS NULL OR occupation = '')
+                OR (location_city IS NULL OR location_city = '')
+                OR (location_country IS NULL OR location_country = '')
+                OR (email IS NULL OR email = '')) DESC,
+                ((org IS NOT NULL AND org != '')
+                + (occupation IS NOT NULL AND occupation != '')
+                + (location_city IS NOT NULL AND location_city != '')
+                + (location_country IS NOT NULL AND location_country != '')
+                + (email IS NOT NULL AND email != '')
+                + (phone IS NOT NULL AND phone != '')) DESC,
+                record_time DESC
     """)
 
     contacts = []
@@ -179,18 +195,27 @@ def recalculate_enrichability_sqlite(weave, contact_id):
 # ─── Progress / Stats ───────────────────────────────────────────────────────
 
 def load_progress():
-    """Load already-processed contact IDs to resume on restart."""
-    processed = set()
+    """Map contact id -> (last attempt time, whether fields were written).
+
+    Drives the cooldown filter: this was previously collected as a lifetime
+    done-set (and then not even applied), but contacts must ROTATE -- recently
+    attempted ones sit out, everyone else gets a turn, and every contact comes
+    back around because people's data changes over time."""
+    latest = {}
     if os.path.exists(PROGRESS_FILE):
         with open(PROGRESS_FILE) as f:
             for line in f:
                 try:
                     rec = json.loads(line.strip())
-                    if rec.get("id"):
-                        processed.add(rec["id"])
+                    cid = rec.get("id")
+                    ts = datetime.fromisoformat(rec.get("ts", ""))
+                    if cid:
+                        prev = latest.get(cid)
+                        if prev is None or ts > prev[0]:
+                            latest[cid] = (ts, bool(rec.get("fields")))
                 except Exception:
                     pass
-    return processed
+    return latest
 
 
 def save_progress(contact_id, name, fields_enriched, error=None):
@@ -264,18 +289,32 @@ def main():
     log(f"Hours until 8am ET deadline: {hours_until_deadline():.1f}")
     log("=" * 60)
 
-    processed_ids = load_progress()
-    log(f"Previously processed: {len(processed_ids)} contacts")
+    recent = load_progress()
+    log(f"Attempt history: {len(recent)} contacts")
 
     contacts = get_contacts_needing_enrichment()
     log(f"Total contacts needing enrichment: {len(contacts)}")
 
-    to_process = contacts[:50]
+    now = datetime.now(timezone.utc)
+
+    def off_cooldown(c):
+        prev = recent.get(c["id"])
+        if prev is None:
+            return True
+        last_ts, had_fields = prev
+        wait = REFRESH_ENRICHED_DAYS if had_fields else RETRY_FAILED_DAYS
+        return (now - last_ts).days >= wait
+
+    eligible = [c for c in contacts if off_cooldown(c)]
+    log(f"Off cooldown and eligible tonight: {len(eligible)} "
+        f"(cooling down: {len(contacts) - len(eligible)})")
+
+    to_process = eligible[:50]
     log(f"Contacts to process this run: {len(to_process)}")
 
     if not to_process:
         log("No contacts to process. All done!")
-        save_stats(0, 0, 0, len(processed_ids), session_start)
+        save_stats(0, 0, 0, len(recent), session_start)
         return
 
     enriched_count = failed_count = skipped_count = 0
@@ -293,60 +332,41 @@ def main():
         log(f"[{i+1}/{len(to_process)}] {name} | gaps: {', '.join(gaps)} | {len(to_process) - i} remaining")
 
         try:
-            # ── SCOUT PHASE ──
-            queries = build_scout_queries(
-                name,
-                name_given=contact.get("name_given", ""),
-                name_family=contact.get("name_family", ""),
-                org=org,
+            # ── SCOUT PHASE (ocas-scout person OSINT) ──
+            # The intended pipeline (contact-enrichment.plan.md): anchor on the
+            # contact's email/phone, run maigret/holehe handle-pivot, and only
+            # accept data when scout corroborates identity across independent
+            # sources. Replaces the old inline SearXNG name-search, which
+            # resolved common names to the wrong person.
+            res = scout_research_contact(contact, top_sites=SCOUT_TOP_SITES)
+            level = res.get("identity", {}).get("level", "none")
+            reason = res.get("identity", {}).get("reason", "")
+
+            # Store ALL corroborated data onto the actual contact node + graph
+            # (fill-empty scalar columns + rich facts). Gated on identity>=med.
+            n_written, level, written_fields = store_scout_findings(
+                contact_id, res, person_name=name, db_path=SQLITE_DB,
+                min_identity="med",
             )
-            all_results = []
-            for q in queries:
-                try:
-                    results = searxng_search(q, limit=5)
-                    all_results.extend(results)
-                    time.sleep(SEARCH_DELAY)
-                except Exception as e:
-                    log(f"  Search error: {e}")
 
-            if not all_results:
-                log("  No search results, skipping")
+            if n_written == 0:
+                log(f"  Scout: identity={level} ({reason}); nothing written")
                 skipped_count += 1
-                save_progress(contact_id, name, [], error="no_search_results")
+                save_progress(contact_id, name, [], error=f"scout_identity_{level}")
                 continue
 
-            log(f"  Scout: {len(all_results)} results from {len(queries)} queries")
-
-            # ── SIFT PHASE ──
-            enrichment = sift_extract_from_pages(name, all_results, max_pages=3)
-            sources = enrichment.pop("_sources", [])
-
-            if not enrichment:
-                log("  No extractable data from pages")
-                skipped_count += 1
-                save_progress(contact_id, name, [], error="no_extractable_data")
-                continue
-
-            log(f"  Sift: extracted {list(enrichment.keys())} from {len(sources)} pages")
-
-            # ── Write to Weave ──
             from weave_sqlite import WeaveDB
             weave = WeaveDB(SQLITE_DB)
-            success = enrich_weave_contact(contact_id, enrichment, confidence=MIN_CONFIDENCE, person_name=name)
-            if success:
-                _recalculate_enrichability(weave, contact_id)
-                written_fields = [k for k in enrichment.keys() if validate_field(k, enrichment[k], name)]
-                log(f"  ✓ Enriched: {written_fields}")
-                enriched_count += 1
-                save_progress(contact_id, name, written_fields)
+            _recalculate_enrichability(weave, contact_id)
+            log(f"  ✓ Scout {level}: wrote {n_written} facts/fields "
+                f"{sorted(set(written_fields))} "
+                f"(sites={res.get('identity', {}).get('corroborating_sites', [])})")
+            enriched_count += 1
+            save_progress(contact_id, name, written_fields)
 
-                if enriched_count % SYNC_EVERY == 0:
-                    log(f"  [{enriched_count} enriched so far — syncing to Google]")
-                    sync_to_google()
-            else:
-                log("  ✗ Write failed")
-                failed_count += 1
-                save_progress(contact_id, name, [], error="write_failed")
+            if enriched_count % SYNC_EVERY == 0:
+                log(f"  [{enriched_count} enriched so far — syncing to Google]")
+                sync_to_google()
 
         except Exception as e:
             log(f"  ✗ Error: {e}")

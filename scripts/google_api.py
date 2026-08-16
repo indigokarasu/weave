@@ -10,6 +10,7 @@ import urllib.parse
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import sys
+import os
 
 _HELP_ARGS = {"--help", "-h"}
 if set(sys.argv[1:]) & _HELP_ARGS:
@@ -18,7 +19,9 @@ if set(sys.argv[1:]) & _HELP_ARGS:
 
 
 
-TOKEN_PATH = Path('<google-workspace-mcp-creds>/credentials/os.environ.get("OCAS_OPERATOR_EMAIL", "operator@example.com").json')
+CREDS_DIR = os.environ.get("WORKSPACE_MCP_CREDENTIALS_DIR", "/root/.google_workspace_mcp/credentials")
+OPERATOR_EMAIL = os.environ.get("OCAS_OPERATOR_EMAIL", "operator_email")
+TOKEN_PATH = Path(CREDS_DIR) / f"{OPERATOR_EMAIL}.json"
 PEOPLE_API_BASE = 'https://people.googleapis.com/v1'
 
 

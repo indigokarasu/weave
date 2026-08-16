@@ -25,8 +25,8 @@ SQLITE_DB = AGENT_ROOT / "commons/db/ocas-weave/weave.sqlite"
 # Shared enrichment logic
 sys.path.insert(0, str(Path(__file__).parent))
 from weave_enrich import (
-    searxng_search, fetch_page, extract_from_content,
-    validate_field, is_auth_walled,
+    searxng_search, fetch_page, extract_from_content, llm_verify_extract,
+    validate_field, is_auth_walled, should_skip_domain,
     build_scout_queries, SEARXNG_URL, JINA_BASE,
     log, sift_extract_from_pages, enrich_weave_contact,
 )
@@ -71,10 +71,14 @@ def quick_enrich(name, org=None, location=None):
     # ── SCOUT PHASE ──
     print(f"\n[1/4] SCOUT — SearXNG identity-resolved research")
     parts = name.split()
-    queries = build_scout_queries(name, name_given=parts[0] if parts else "", name_family=parts[-1] if len(parts) > 1 else "", org=org or "")
-    # Also add a professional background query
-    queries.append(f'"{name}" professional background')
-    queries = queries[:4]
+    queries = build_scout_queries(
+        name,
+        name_given=parts[0] if parts else "",
+        name_family=parts[-1] if len(parts) > 1 else "",
+        org=org or "",
+        location_city=location or ""
+    )
+    queries = queries[:5]  # Allow up to 5 queries now
 
     all_results = []
     for q in queries:
@@ -96,6 +100,17 @@ def quick_enrich(name, org=None, location=None):
     handles = set()
     fetched = 0
     seen_domains = set()
+
+    # Build context for the LLM gate
+    gate_context = {
+        "name_given": parts[0] if parts else "",
+        "name_family": parts[-1] if len(parts) > 1 else "",
+    }
+    if org:
+        gate_context["org"] = org
+    if location:
+        gate_context["location_city"] = location
+
     for result in all_results:
         url = result.get("url", "")
         if not url or is_auth_walled(url):
@@ -109,9 +124,25 @@ def quick_enrich(name, org=None, location=None):
         if not content:
             continue
         log(f"  Fetched {domain} via {method} ({len(content)} chars)")
-        extracted = extract_from_content(name, content, url)
+        # Pass context to gate so it can validate against known fields
+        extracted = llm_verify_extract(name, url, content, context=gate_context)
+        if extracted is None:
+            log(f"  no LLM reachable for {domain}; trying regex fallback")
+            # Fallback to regex extraction if no LLM (lower confidence)
+            extracted = extract_from_content(name, content, url)
+            if extracted:
+                for k in extracted:
+                    if k.endswith("_confidence"):
+                        extracted[k] = max(0.3, extracted[k] - 0.2)  # Mark as unverified
+        if not extracted:
+            log(f"  no data extracted from {domain}")
+            continue
+        # Merge, preferring higher confidence
         for k, v in extracted.items():
-            if k not in merged:
+            if k.endswith("_confidence"):
+                if k not in merged or v > merged.get(k, 0):
+                    merged[k] = v
+            elif k not in merged:
                 merged[k] = v
         # Extract handles from content
         for pattern in [rf'@(\w{{3,20}})\b', r'github\.com/(\w+)', r'twitter\.com/(\w+)', r'x\.com/(\w+)']:

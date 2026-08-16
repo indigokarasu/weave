@@ -231,8 +231,8 @@ def test_parse_github_api_user_not_found():
 
 
 def test_parse_github_api_strips_company_at():
-    f = parse_github_api_user('{"login":"x","company":"@anthropics"}')
-    assert f["org"] == "anthropics"
+    f = parse_github_api_user('{"login":"x","company":"@acme-labs"}')
+    assert f["org"] == "acme-labs"
 
 
 # ── URL normalization ─────────────────────────────────────────────────────

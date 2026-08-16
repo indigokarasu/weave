@@ -6,3 +6,9 @@ node_modules/
 *.egg-info/
 .env
 .env.local
+*.bak
+*.bak.*
+decisions.jsonl
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

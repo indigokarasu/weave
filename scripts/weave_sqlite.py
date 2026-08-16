@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Weave SQLite backend — drop-in replacement for LadybugDB.
+Weave SQLite backend — drop-in replacement for SQLite.
 
 Usage:
     from weave_sqlite import WeaveDB
@@ -48,7 +48,11 @@ CREATE TABLE IF NOT EXISTS preferences (
 CREATE TABLE IF NOT EXISTS facts (
     id TEXT PRIMARY KEY, predicate TEXT NOT NULL, value TEXT NOT NULL,
     confidence REAL NOT NULL DEFAULT 0.8, source_type TEXT NOT NULL DEFAULT 'imported',
-    source_ref TEXT NOT NULL DEFAULT '', record_time TEXT NOT NULL DEFAULT (datetime('now'))
+    source_ref TEXT NOT NULL DEFAULT '', record_time TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Temporal validity: additive graph. A fact is never deleted. valid_until
+    -- NULL means currently valid; when a single-valued predicate (e.g. job)
+    -- gets a new value, the old fact is stamped valid_until + superseded_by.
+    valid_until TEXT, superseded_by TEXT
 );
 CREATE TABLE IF NOT EXISTS edges (
     id TEXT PRIMARY KEY, source_id TEXT NOT NULL, target_id TEXT NOT NULL,

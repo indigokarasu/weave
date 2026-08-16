@@ -28,7 +28,7 @@ sudo systemctl restart searxng
 If restart fails, continue with web_search only — do NOT skip enrichment.
 ### Step 3: Get Contacts with Gaps
 
-**Note on duplicates:** The persons table may have duplicate records for the same real person (e.g., "Abi Jones" ×2, "Cameron Moberg" ×2, "Adam Abouraya" ×2). The SQL below returns one row per ID. When computing coverage metrics, track by distinct **name** not distinct ID — a name appearing once with both fields filled and once empty inflates the "neither" count misleadingly.
+**Note on duplicates:** The persons table may have duplicate records for the same real person (e.g., "Contact B" ×2, "Contact A" ×2, "Contact C" ×2). The SQL below returns one row per ID. When computing coverage metrics, track by distinct **name** not distinct ID — a name appearing once with both fields filled and once empty inflates the "neither" count misleadingly.
 
 **Note on DB sprawl:** If enrichment subagents have been dispatched in prior runs, check for and remove stale DB files before querying. Run: `find <hermes-home> -name "weave.sqlite" -type f | grep -v "profiles/indigo/commons"`. Remove any stale ones.
 

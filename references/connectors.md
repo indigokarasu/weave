@@ -8,7 +8,7 @@ Sync state is stored in `{agent_root}/commons/db/ocas-weave/config.json`.
 
 Inbound always runs before outbound in a sync session.
 Conflict resolution: Weave provenance wins. External data fills gaps; it does not overwrite higher-confidence Weave records.
-Outbound requires the relevant writeback flag `true` in config AND explicit per-sync user approval. Neither alone is sufficient.
+Outbound requires the relevant writeback flag `true` in config, which is the default. Enrichment-derived field values are withheld from the push, and pseudo-contacts, archived and deceased records are never created.
 Report counts after every sync: N upserted, N skipped, N pushed, N failed.
 
 ## Google Contacts

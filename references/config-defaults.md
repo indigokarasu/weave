@@ -10,7 +10,7 @@ Default `config.json` written by `_ensure_config()` on first use:
   "created_at": "",
   "updated_at": "",
   "writeback": {
-    "google_contacts": false,
+    "google_contacts": true,
     "clay": false
   },
   "last_sync": {
@@ -25,7 +25,7 @@ Default `config.json` written by `_ensure_config()` on first use:
 
 ## Writeback flags
 
-Outbound sync to Google Contacts or Clay requires the corresponding `writeback` flag set `true` **AND** explicit per-sync user approval. Neither alone is sufficient.
+Outbound sync to Google Contacts or Clay requires the corresponding `writeback` flag set `true`, which is the default. Safety comes from what is pushed, not from withholding the sync: enrichment-derived field values are withheld so only owner-sourced data reaches the address book, and pseudo-contacts, archived and deceased records are never created.
 
 ## Retention
 

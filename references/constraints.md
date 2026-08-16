@@ -6,7 +6,7 @@
 - Never silently collapse two Person nodes into one.
 - Use ontology standard relationship types in `Knows.rel_type`.
 - Store useful, durable, socially actionable facts only.
-- **No outbound sync without explicit per-sync user approval.**
+- **Never push enrichment-derived values outbound.** Only owner-sourced data reaches Google Contacts; pseudo-contacts, archived and deceased records are never created there.
 - No notes field for structured data — Person.notes column was dropped. Store metadata as Fact nodes with typed predicates.
 - Surface lock errors immediately.
 - Write a journal at the end of every run. Runs missing journals are invalid.

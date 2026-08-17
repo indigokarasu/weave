@@ -19,7 +19,14 @@ from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
+# Derived from this file's own location — <root>/skills/ocas-weave/scripts/ —
+# rather than from Path.home(). The old fallback resolved the DATABASE correctly by
+# accident (~/.hermes/commons is a symlink into the profile) while reading the
+# cooldown history from a different, nearly empty file, so runs looked healthy and
+# quietly re-processed contacts that were already done. An explicit AGENT_ROOT still
+# takes precedence for the cron wrapper.
+_DERIVED_ROOT = Path(__file__).resolve().parents[3]
+AGENT_ROOT = Path(os.environ.get("AGENT_ROOT") or _DERIVED_ROOT)
 SQLITE_DB = AGENT_ROOT / "commons/db/ocas-weave/weave.sqlite"
 PROGRESS_FILE = str(AGENT_ROOT / "data/weave-enrichment/progress.jsonl")
 STATS_FILE = str(AGENT_ROOT / "data/weave-enrichment/stats.json")
@@ -34,7 +41,7 @@ MIN_CONFIDENCE = 0.7
 # failed under an OLDER version is retried immediately rather than serving out
 # its cooldown: the cooldown exists to avoid re-asking the same question, not
 # to lock a contact out after the question itself has improved.
-PIPELINE_VERSION = "2026-08-17.osint-4-sitemine"
+PIPELINE_VERSION = "2026-08-17.round3-state-fix"
 
 RETRY_FAILED_DAYS = 7       # nothing found: retry weekly (was 30 — too long to
                             # wait for pipeline fixes to reach failed contacts)
@@ -227,6 +234,29 @@ def load_progress():
     return latest
 
 
+_IDENTITY_RANK = {"high": 3, "med": 2, "low": 1, "none": 0, "error": 0}
+
+
+def _live_scout_fact_count(contact_id):
+    """How many still-valid scout facts this contact already holds.
+
+    Distinguishes "nothing could be found" from "everything is already here",
+    which the skipped counter previously merged.
+    """
+    try:
+        import sqlite3
+        con = sqlite3.connect(str(SQLITE_DB))
+        try:
+            return con.execute(
+                "SELECT COUNT(*) FROM facts f "
+                "JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact' "
+                "WHERE e.source_id = ? AND f.valid_until IS NULL "
+                "AND f.source_type LIKE 'scout%'", (contact_id,)).fetchone()[0]
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001
+        return 0
+
 def save_progress(contact_id, name, fields_enriched, error=None):
     os.makedirs(os.path.dirname(PROGRESS_FILE), exist_ok=True)
     with open(PROGRESS_FILE, "a") as f:
@@ -324,7 +354,13 @@ def main():
     log(f"Off cooldown and eligible tonight: {len(eligible)} "
         f"(cooling down: {len(contacts) - len(eligible)})")
 
-    to_process = eligible[:50]
+    # Overridable so a tuning loop can run small rounds; the nightly cron
+    # sets nothing and keeps the original 50.
+    try:
+        _batch = int(os.environ.get("WEAVE_BATCH_SIZE", "50"))
+    except ValueError:
+        _batch = 50
+    to_process = eligible[:max(1, _batch)]
     log(f"Contacts to process this run: {len(to_process)}")
 
     if not to_process:
@@ -333,6 +369,7 @@ def main():
         return
 
     enriched_count = failed_count = skipped_count = 0
+    already_current_count = 0
 
     for i, contact in enumerate(to_process):
         if is_past_deadline():
@@ -375,9 +412,21 @@ def main():
             )
 
             if n_written == 0:
-                log(f"  Scout: identity={level} ({reason}); nothing written")
-                skipped_count += 1
-                save_progress(contact_id, name, [], error=f"scout_identity_{level}")
+                # "Nothing written" has two opposite causes and they were counted
+                # as one. A contact whose data is already on file is complete, not
+                # failed: recording it with an empty field list gave it the short
+                # retry cooldown and it returned to do nothing again.
+                already = _live_scout_fact_count(contact_id)
+                if already and _IDENTITY_RANK.get(level, 0) >= 2:
+                    log(f"  ✓ Already current: identity={level}, "
+                        f"{already} fact(s) already on file, nothing new to add")
+                    already_current_count += 1
+                    save_progress(contact_id, name, ["__already_current__"])
+                else:
+                    log(f"  Scout: identity={level} ({reason}); nothing written")
+                    skipped_count += 1
+                    save_progress(contact_id, name, [],
+                                  error=f"scout_identity_{level}")
                 continue
 
             from weave_sqlite import WeaveDB
@@ -413,6 +462,7 @@ def main():
     log(f"  Enriched: {enriched_count}")
     log(f"  Failed: {failed_count}")
     log(f"  Skipped: {skipped_count}")
+    log(f"  Already current: {already_current_count}")
     log(f"  Total processed (all runs): {total_processed}")
     log("=" * 60)
 

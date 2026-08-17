@@ -181,6 +181,17 @@ def _name_tokens(name):
     return [t for t in re.findall(r"[A-Za-z]+", clean_person_name(name)) if len(t) >= 2]
 
 
+def _anchor_name_tokens(name):
+    """Tokens for the ENRICHABILITY decision, counting initials.
+
+    A given name written as initials still identifies a person when paired with a
+    surname, so it must not be mistaken for a lone first name. _name_tokens drops
+    single characters and is left alone: its other callers compare tokens against
+    profile text, where a one-character token matches almost anything.
+    """
+    import re as _re
+    return [t for t in _re.findall(r"[A-Za-z]+", clean_person_name(name)) if len(t) >= 1]
+
 def has_sufficient_anchors(person):
     """Decide whether a contact is enrichable by web search at all.
 
@@ -197,12 +208,14 @@ def has_sufficient_anchors(person):
         family = (person.get("name_family") or "").strip()
         name = f"{given} {family}".strip()
 
-    tokens = _name_tokens(name)
+    # Counting initials here: "<I>.<I>. <Family>" is a searchable name, and dropping
+    # the initials made it look like a lone given name.
+    tokens = _anchor_name_tokens(name)
     if len(tokens) < 2:
         # A REAL family name stored separately counts as a second token —
         # but only after cleaning: contacts store junk like "(art Class)"
         # in name_family, which must not rescue an unenrichable name.
-        family_tokens = _name_tokens(person.get("name_family") or "")
+        family_tokens = _anchor_name_tokens(person.get("name_family") or "")
         tokens.extend(
             t for t in family_tokens
             if not tokens or t.lower() != tokens[0].lower()
@@ -1481,8 +1494,13 @@ def store_scout_findings(contact_id, res, person_name="", db_path=None,
             _add(k, v, enr.get(f"{k}_source", "scout_osint"), conf)
 
     for p in res.get("profiles", []):
-        if not (p.get("name_shared_tokens", 0) >= 2 or p.get("family_present")):
-            continue  # only corroborated profiles
+        # Full-name agreement, or the contact's own curated URL. A surname-only
+        # match may support the identity level but must not source facts: on a
+        # common surname it is a namesake, and its bio, location and handle belong
+        # to someone else.
+        _full = (p.get("name_shared_tokens", 0) >= 2 and p.get("family_present"))
+        if not (_full or p.get("curated")):
+            continue
         url = (p.get("url") or "").strip()
         plat = (p.get("site") or "").strip().lower()
         if plat and url:

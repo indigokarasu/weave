@@ -1317,6 +1317,51 @@ def _ensure_fact_validity_columns(weave):
         weave.execute_write("ALTER TABLE facts ADD COLUMN superseded_by TEXT")
 
 
+# Source types that mean "a human put this here", as opposed to something scout
+# inferred. A curated URL is treated by scout as the contact's own assertion about
+# which account is theirs, so scout's own findings must never be fed back in: that
+# would turn a guess into ground truth on the next pass.
+_CURATED_URL_SOURCES = (
+    "google_contacts", "contact_record", "imported", "linkedin_import",
+    "user-stated", "user_stated",
+)
+
+
+def curated_urls_for_contact(contact_id, db_path=None):
+    """Hand-entered profile URLs and website for a contact, newest first.
+
+    Excludes anything scout produced. Returns [] on any error — a missing anchor
+    list must degrade to the old behaviour, never break the run.
+    """
+    if not contact_id:
+        return []
+    try:
+        from weave_sqlite import WeaveDB
+        weave = WeaveDB(db_path) if db_path else WeaveDB()
+        marks = ",".join("?" * len(_CURATED_URL_SOURCES))
+        rows = weave.execute(
+            "SELECT f.value AS value FROM facts f "
+            "JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact' "
+            "WHERE e.source_id = ? AND f.valid_until IS NULL "
+            "  AND (f.predicate LIKE 'profile_%' OR f.predicate = 'website') "
+            "  AND f.source_type IN (" + marks + ") "
+            "ORDER BY f.record_time DESC",
+            (contact_id,) + _CURATED_URL_SOURCES)
+        urls = [r["value"] for r in rows if r.get("value")]
+        own = weave.execute("SELECT website FROM persons WHERE id = ?", (contact_id,))
+        if own and own[0].get("website"):
+            urls.append(own[0]["website"])
+        seen, out = set(), []
+        for u in urls:
+            k = (u or "").strip().rstrip("/").lower()
+            if k and k not in seen:
+                seen.add(k)
+                out.append(u.strip())
+        return out
+    except Exception as e:  # noqa: BLE001
+        log(f"  scout: could not read curated urls ({str(e)[:60]})")
+        return []
+
 def scout_research_contact(contact, top_sites=300):
     """Run ocas-scout's person-OSINT for one contact and return the full result
     (the intended path; see ocas-scout/references/plans/contact-enrichment.plan.md).
@@ -1338,12 +1383,24 @@ def scout_research_contact(contact, top_sites=300):
         return {"identity": {"level": "error", "reason": str(e)[:120]},
                 "profiles": [], "findings": [], "enrichment": {}, "tools": []}
 
+    # Everything the contact record already knows. These were being dropped, so
+    # the curated-URL path never ran in the nightly pipeline and contacts with no
+    # email but a known employer, job title and personal site looked unsearchable.
+    known_urls = curated_urls_for_contact(get("id", "") or "")
+    if known_urls:
+        log(f"  scout: {len(known_urls)} curated url(s) from the contact record")
     return research_person(
         get("name", "") or "",
         email=get("email", "") or "",
         employer=get("org", "") or "",
         phone=get("phone", "") or "",
         top_sites=top_sites,
+        org=get("org", "") or "",
+        occupation=get("occupation", "") or "",
+        location_city=get("location_city", "") or "",
+        known_urls=known_urls,
+        name_given=get("name_given", "") or "",
+        name_family=get("name_family", "") or "",
     )
 
 

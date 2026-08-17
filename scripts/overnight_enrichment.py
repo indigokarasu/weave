@@ -34,7 +34,7 @@ MIN_CONFIDENCE = 0.7
 # failed under an OLDER version is retried immediately rather than serving out
 # its cooldown: the cooldown exists to avoid re-asking the same question, not
 # to lock a contact out after the question itself has improved.
-PIPELINE_VERSION = "2026-08-16.osint-3-gravatar"
+PIPELINE_VERSION = "2026-08-17.osint-4-sitemine"
 
 RETRY_FAILED_DAYS = 7       # nothing found: retry weekly (was 30 — too long to
                             # wait for pipeline fixes to reach failed contacts)

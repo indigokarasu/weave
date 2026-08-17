@@ -30,13 +30,21 @@ SCOUT_TOP_SITES = 300   # maigret site breadth per contact (speed vs coverage)
 SYNC_EVERY = 30         # Sync to Google after this many enriched contacts
 DEADLINE_HOUR_ET = 8    # Stop at 8am ET
 MIN_CONFIDENCE = 0.7
-RETRY_FAILED_DAYS = 30      # nothing found: try again in a month (new accounts appear)
+# Bumped whenever the enrichment pipeline gains a capability. A contact that
+# failed under an OLDER version is retried immediately rather than serving out
+# its cooldown: the cooldown exists to avoid re-asking the same question, not
+# to lock a contact out after the question itself has improved.
+PIPELINE_VERSION = "2026-08-16.osint-3-gravatar"
+
+RETRY_FAILED_DAYS = 7       # nothing found: retry weekly (was 30 — too long to
+                            # wait for pipeline fixes to reach failed contacts)
 REFRESH_ENRICHED_DAYS = 90  # data found: re-verify quarterly (jobs and cities change)
 
 # Shared enrichment logic
 sys.path.insert(0, str(Path(__file__).parent))
 from weave_enrich import (
     log, scout_research_contact, store_scout_findings,
+    has_sufficient_anchors,
 )
 
 _HELP_ARGS = {"--help", "-h"}
@@ -212,7 +220,8 @@ def load_progress():
                     if cid:
                         prev = latest.get(cid)
                         if prev is None or ts > prev[0]:
-                            latest[cid] = (ts, bool(rec.get("fields")))
+                            latest[cid] = (ts, bool(rec.get("fields")),
+                                           rec.get("pipeline_version", ""))
                 except Exception:
                     pass
     return latest
@@ -224,6 +233,7 @@ def save_progress(contact_id, name, fields_enriched, error=None):
         json.dump({
             "id": contact_id, "name": name,
             "fields": fields_enriched, "error": error,
+            "pipeline_version": PIPELINE_VERSION,
             "ts": datetime.now(timezone.utc).isoformat(),
         }, f)
         f.write("\n")
@@ -301,7 +311,12 @@ def main():
         prev = recent.get(c["id"])
         if prev is None:
             return True
-        last_ts, had_fields = prev
+        last_ts, had_fields = prev[0], prev[1]
+        prev_version = prev[2] if len(prev) > 2 else ""
+        # A failure recorded by an older pipeline is not evidence that the
+        # CURRENT pipeline cannot find this person — retry it now.
+        if not had_fields and prev_version != PIPELINE_VERSION:
+            return True
         wait = REFRESH_ENRICHED_DAYS if had_fields else RETRY_FAILED_DAYS
         return (now - last_ts).days >= wait
 
@@ -338,6 +353,16 @@ def main():
             # accept data when scout corroborates identity across independent
             # sources. Replaces the old inline SearXNG name-search, which
             # resolved common names to the wrong person.
+            # Refuse contacts that cannot be resolved by any amount of search
+            # BEFORE spending a full multi-site sweep on them: single-token
+            # names and business records burned ~30s each to conclude nothing.
+            ok_anchor, anchor_reason = has_sufficient_anchors(contact)
+            if not ok_anchor:
+                log(f"  Skipped: {anchor_reason} (no sweep attempted)")
+                save_progress(contact_id, name, [], error=f"unenrichable: {anchor_reason}")
+                skipped_count += 1
+                continue
+
             res = scout_research_contact(contact, top_sites=SCOUT_TOP_SITES)
             level = res.get("identity", {}).get("level", "none")
             reason = res.get("identity", {}).get("reason", "")

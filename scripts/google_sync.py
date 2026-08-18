@@ -271,6 +271,62 @@ def _inferred_field_values(weave):
     return out
 
 
+# ── Outbound plausibility gate ───────────────────────────────────────────────
+# A previous enrichment pass wrote search-result snippets into org/occupation and
+# they were pushed into the user's real Google Contacts: single words sliced out
+# of a sentence ("Serving", "Greater", "Atlantic"), several job titles run
+# together with no separator ("...ienceUX Specialist / User ExperienceSenior D"),
+# prose about the person ("He was previously the head coach at..."), and a news
+# headline that landed on five unrelated contacts. The provenance gate did not
+# stop it because those rows were labelled 'imported', which is not withheld.
+#
+# So the value itself is checked. Every rule is written to be impossible to
+# trigger on a real employer or title: acronyms (HSBC, MIT, IDEO), ordinary
+# titles (CEO, SVP of Design) and long-but-genuine names must all pass.
+import re as _re
+
+# Case matters: these detect character-level corruption, so they must NOT be
+# compiled with IGNORECASE — doing so makes ^[a-z][A-Z] match any two letters.
+_JUNK_CASE_SENSITIVE = _re.compile(
+    r"^[a-z][A-Z]"        # starts mid-word: 'yPrincipal Pr', 'eGrants M'
+    r"|^[a-z]\s[A-Z]"     # a stranded letter before the first word: 'r Vice President'
+    r"|\s[A-Z]$"          # dangling capitalised remnant: 'duct Marketing, G'
+    r"|\)[A-Z]$"
+)
+# Words that are never an employer or a job title on their own.
+_JUNK_ANY_CASE = _re.compile(
+    r"^(the|a|an|and|or|of|for|with|from|at|in|on|to|by"
+    r"|serving|greater|atlantic|senior|technical|work|working|about"
+    r"|former|current|based|located)$"
+    r"|^(www\.|https?://)"                                   # a url is not an employer
+    r"|^(birth|facts date|anniversary)\b"                    # label text from an import
+    r"|\b(he|she|they)\b.{0,40}\b(was|were|began|joined)\b"  # prose about a person
+    r"|\bselect(s|ed)\b.*\bpick\b"                          # sports headline
+    r"|\d+\s+(days?|hours?|weeks?|months?)\s+ago"            # search-result timestamp
+    r"|\u00b7",                                              # SERP separator
+    _re.I)
+
+
+def is_implausible_job_value(value):
+    """(True, reason) when a value must not be written to a contact's employer or
+    title field. Returns (False, "") for anything that looks like real data."""
+    v = (value or "").strip()
+    if not v:
+        return False, ""
+    if _JUNK_CASE_SENSITIVE.search(v):
+        return True, "starts or ends mid-word (corrupted slice)"
+    if _JUNK_ANY_CASE.search(v):
+        return True, "sentence fragment, url, label text or scraped snippet"
+    # Several titles concatenated with no separator: a lowercase letter followed
+    # immediately by an uppercase one, more than once, inside a long string.
+    # Several titles concatenated with no separator. Requires the uppercase to
+    # be followed by lowercase -- a new Capitalised Word -- so acronym
+    # boundaries (TropiCAD, AutoCAD) do not count, and requires three of them
+    # so CamelCase brand names (HelloKindred, VentureWeb) are not withheld.
+    if len(v) > 24 and len(_re.findall(r"[a-z][A-Z][a-z]", v)) >= 3:
+        return True, "several values run together without a separator"
+    return False, ""
+
 def sync_outbound(token, last_sync_at):
     """Push Weave changes TO Google Contacts via REST API + SQLite backend."""
     sys.path.insert(0, str(Path(__file__).parent))
@@ -383,7 +439,23 @@ def sync_outbound(token, last_sync_at):
         if phone_clean:
             body["phoneNumbers"] = [{"value": phone_clean}]
         if org or title:
-            body["organizations"] = [{"name": org or "", "title": title or ""}]
+            # Last line of defence before a value reaches the user's real contacts.
+            # This is the one place organizations is constructed, for both created
+            # and updated contacts, so a junk value cannot reach Google by any
+            # path. Withheld rather than corrected: the true value is not known
+            # here, and an empty field is better than a wrong one.
+            _bad_org, _why_org = is_implausible_job_value(org)
+            _bad_title, _why_title = is_implausible_job_value(title)
+            if _bad_org:
+                print("  withheld org %r for %s %s: %s"
+                      % (org[:40], given or "", family or "", _why_org))
+                org = ""
+            if _bad_title:
+                print("  withheld title %r for %s %s: %s"
+                      % (title[:40], given or "", family or "", _why_title))
+                title = ""
+            if org or title:
+                body["organizations"] = [{"name": org or "", "title": title or ""}]
         if city or country:
             address = {}
             if city:

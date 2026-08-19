@@ -41,7 +41,7 @@ MIN_CONFIDENCE = 0.7
 # failed under an OLDER version is retried immediately rather than serving out
 # its cooldown: the cooldown exists to avoid re-asking the same question, not
 # to lock a contact out after the question itself has improved.
-PIPELINE_VERSION = "2026-08-17.round3-state-fix"
+PIPELINE_VERSION = "2026-08-19.round9"
 
 RETRY_FAILED_DAYS = 7       # nothing found: retry weekly (was 30 — too long to
                             # wait for pipeline fixes to reach failed contacts)
@@ -451,6 +451,21 @@ def main():
 
     # Final sync
     if enriched_count > 0:
+        # The site gate self-extends: every run probes sites it has not seen and
+        # can newly classify one as answering for any handle. Facts written BEFORE
+        # that discovery stay live unless something sweeps them, so the sweep runs
+        # here rather than waiting to be noticed. Measured: the blocked set grew
+        # from 4 to 13 hosts over three runs, leaving 59 stale facts behind.
+        try:
+            import subprocess as _sp
+            _sw = _sp.run(["/root/hermes-agent/.venv/bin/python",
+                           "/root/.hermes/profiles/indigo/skills/ocas-weave/"
+                           "scripts/sweep_blocked_sites.py", "--apply"],
+                          capture_output=True, text=True, timeout=300)
+            for _l in (_sw.stdout or "").strip().splitlines()[-3:]:
+                log(f"  site sweep: {_l}")
+        except Exception as _e:  # noqa: BLE001
+            log(f"  site sweep skipped: {str(_e)[:70]}")
         log("Final Google Contacts sync...")
         sync_to_google()
 

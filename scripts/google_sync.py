@@ -326,6 +326,24 @@ import re as _re
 
 # Case matters: these detect character-level corruption, so they must NOT be
 # compiled with IGNORECASE — doing so makes ^[a-z][A-Z] match any two letters.
+# 'eBay' and 'eGrants M' are the SAME shape, so a pattern cannot separate a styled
+# brand from a sentence sliced mid-word. Only two exemptions are unambiguous: a
+# lowercase letter followed by an all-caps run (iOS, xAI -- a slice leaves lowercase),
+# and an explicit list of known lowercase-initial brands.
+_BRAND_CAPS = _re.compile(r"^[a-z][A-Z]{2,}\b")
+_BRAND_WORDS = ("ebay", "iphone", "ipad", "ipod", "imac", "itunes", "icloud",
+                "macbook", "airpods", "ethereum", "esports", "ebooks", "email")
+
+
+def _is_brand_prefix(v):
+    """True for a deliberately lowercase-initial brand, not a sliced fragment."""
+    v = (v or "").strip()
+    if _BRAND_CAPS.match(v):
+        return True
+    first = (v.split()[0] if v.split() else "").lower().strip(".,")
+    return first in _BRAND_WORDS
+
+
 _JUNK_CASE_SENSITIVE = _re.compile(
     r"^[a-z][A-Z]"        # starts mid-word: 'yPrincipal Pr', 'eGrants M'
     r"|^[a-z]\s[A-Z]"     # a stranded letter before the first word: 'r Vice President'
@@ -340,7 +358,7 @@ _JUNK_ANY_CASE = _re.compile(
     r"|^(www\.|https?://)"                                   # a url is not an employer
     r"|^(birth|facts date|anniversary)\b"                    # label text from an import
     r"|\b(he|she|they)\b.{0,40}\b(was|were|began|joined)\b"  # prose about a person
-    r"|\bselect(s|ed)\b.*\bpick\b"                          # sports headline
+    r"|\bselect(s|ed)?\b.*\bpick\b"                          # sports headline
     r"|\d+\s+(days?|hours?|weeks?|months?)\s+ago"            # search-result timestamp
     r"|\u00b7",                                              # SERP separator
     _re.I)
@@ -352,10 +370,32 @@ def is_implausible_job_value(value):
     v = (value or "").strip()
     if not v:
         return False, ""
-    if _JUNK_CASE_SENSITIVE.search(v):
+    if _is_brand_prefix(v):
+        pass                       # iOS Developer, eBay, xAI -- styling, not a slice
+    elif _JUNK_CASE_SENSITIVE.search(v):
         return True, "starts or ends mid-word (corrupted slice)"
     if _JUNK_ANY_CASE.search(v):
         return True, "sentence fragment, url, label text or scraped snippet"
+    # A bare preposition or conjunction. Measured: one contact had org "over" and
+    # another "Over" paired with a news headline as the title.
+    if _re.fullmatch(r"(over|under|after|before|amid|amidst|against|into|onto|among"
+                     r"|between|during|despite|toward|towards|within|without|via"
+                     r"|versus|vs|plus|per)", v, _re.I):
+        return True, "a preposition is not a company or a job title"
+    # A lowercase fragment of three or more characters followed later by a capital:
+    # a sentence sliced mid-word. A deliberately lowercase brand or title stays
+    # lowercase, so it is not caught ('db Motion Graphics' is exempt on length,
+    # 'flash artist, motionographer' has no later capital).
+    # Two characters is enough: 'or Program Manager IIEngineering Ma' escaped a
+    # three-character floor. Real two-letter openers are allowlisted.
+    _REAL_2 = {"db", "hr", "ux", "ui", "qa", "it", "pr", "ai", "co", "de", "la", "le",
+               "el", "al", "st", "mc", "on", "in", "at", "to", "by", "of", "my", "go"}
+    _first = v.split()[0] if v.split() else ""
+    if (len(_first) >= 2 and _first[0].islower() and _first.isalpha()
+            and _first.lower() not in _REAL_2
+            and not _is_brand_prefix(v)             # iOS, eBay, xAI
+            and _re.search(r"[A-Z]", v[len(_first):])):
+        return True, "starts with a lowercase word fragment, then a capital"
     # Several titles concatenated with no separator: a lowercase letter followed
     # immediately by an uppercase one, more than once, inside a long string.
     # Several titles concatenated with no separator. Requires the uppercase to

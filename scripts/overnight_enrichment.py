@@ -41,7 +41,7 @@ MIN_CONFIDENCE = 0.7
 # failed under an OLDER version is retried immediately rather than serving out
 # its cooldown: the cooldown exists to avoid re-asking the same question, not
 # to lock a contact out after the question itself has improved.
-PIPELINE_VERSION = "2026-08-19.round9"
+PIPELINE_VERSION = "2026-08-19.round11"
 
 RETRY_FAILED_DAYS = 7       # nothing found: retry weekly (was 30 — too long to
                             # wait for pipeline fixes to reach failed contacts)
@@ -321,6 +321,27 @@ def hours_until_deadline():
 
 # ─── MAIN ───────────────────────────────────────────────────────────────────
 
+def _curated_url_count(contact_id):
+    """How many hand-entered profile urls this contact has, for ranking only."""
+    if not contact_id:
+        return 0
+    try:
+        import sqlite3
+        con = sqlite3.connect(str(SQLITE_DB))
+        try:
+            return con.execute(
+                "SELECT COUNT(*) FROM facts f "
+                "JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact' "
+                "WHERE e.source_id = ? AND f.valid_until IS NULL "
+                "  AND f.source_type IN ('google_contacts','contact_record',"
+                "                        'imported','linkedin_import') "
+                "  AND (f.predicate LIKE 'profile_%' OR f.predicate = 'website')",
+                (contact_id,)).fetchone()[0]
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001
+        return 0
+
 def main():
     session_start = datetime.now(timezone.utc)
 
@@ -360,6 +381,38 @@ def main():
         _batch = int(os.environ.get("WEAVE_BATCH_SIZE", "50"))
     except ValueError:
         _batch = 50
+    # Searchable contacts first. The SQL ordering ranks by how many columns are
+    # populated, which was right when every field was an extra anchor and is wrong
+    # now that an anchor is required: a contact with no email cannot be resolved
+    # however rich it is, and a distinctive address with nothing else can.
+    def _anchor_rank(c):
+        try:
+            # research_person lives in the scout skill, not on the default path;
+            # without this the import fails silently and every contact ranks 0,
+            # which would leave the ordering exactly as broken as before.
+            _sd = str(AGENT_ROOT / "skills/ocas-scout/scripts")
+            if _sd not in sys.path:
+                sys.path.insert(0, _sd)
+            from research_person import (_handle_is_bare_name_part,
+                                         email_handle_variants)
+        except Exception as _e:  # noqa: BLE001
+            log(f"  anchor ranking unavailable ({str(_e)[:50]}); order unchanged")
+            return 0
+        em = (c.get("email") or "").strip()
+        if em:
+            local = em.split("@")[0]
+            if email_handle_variants(em) and not _handle_is_bare_name_part(
+                    local, c.get("name") or "", c.get("name_given") or "",
+                    c.get("name_family") or ""):
+                return 2                      # a usable handle to pivot on
+        if _curated_url_count(c.get("id")):
+            return 1                          # the owner's own url
+        return 0                              # nothing to search from
+
+    eligible.sort(key=_anchor_rank, reverse=True)
+    _ranked = [_anchor_rank(c) for c in eligible[:max(1, _batch)]]
+    log(f"Anchor mix in this batch: {_ranked.count(2)} usable email handle, "
+        f"{_ranked.count(1)} curated url, {_ranked.count(0)} no anchor")
     to_process = eligible[:max(1, _batch)]
     log(f"Contacts to process this run: {len(to_process)}")
 
@@ -450,22 +503,36 @@ def main():
         time.sleep(0.5)
 
     # Final sync
+    # The site gate self-extends: every run probes sites it has not seen and
+    # can newly classify one as answering for any handle. Facts written BEFORE
+    # that discovery stay live unless something sweeps them, so the sweep runs
+    # here rather than waiting to be noticed. Measured: the blocked set grew
+    # from 4 to 13 hosts over three runs, leaving 59 stale facts behind.
+    try:
+        import subprocess as _sp
+        _sw = _sp.run(["/root/hermes-agent/.venv/bin/python",
+                       "/root/.hermes/profiles/indigo/skills/ocas-weave/"
+                       "scripts/sweep_blocked_sites.py", "--apply"],
+                      capture_output=True, text=True, timeout=300)
+        for _l in (_sw.stdout or "").strip().splitlines()[-3:]:
+            log(f"  site sweep: {_l}")
+    except Exception as _e:  # noqa: BLE001
+        log(f"  site sweep skipped: {str(_e)[:70]}")
+    # Clear job-field junk by TESTING the value on both sides. The earlier
+    # sweep matched a remembered string, so any drift between what weave held
+    # and what google held left google's copy in place and inbound restored it.
+    try:
+        _jf = _sp.run(["/root/hermes-agent/.venv/bin/python",
+                       "/root/.hermes/profiles/indigo/skills/ocas-weave/"
+                       "scripts/sweep_job_fields.py", "--apply"],
+                      capture_output=True, text=True, timeout=600)
+        for _l in (_jf.stdout or "").strip().splitlines()[-2:]:
+            log(f"  job-field sweep: {_l}")
+    except Exception as _e:  # noqa: BLE001
+        log(f"  job-field sweep skipped: {str(_e)[:70]}")
+
+    # Only the push is conditional: nothing changed means nothing to send.
     if enriched_count > 0:
-        # The site gate self-extends: every run probes sites it has not seen and
-        # can newly classify one as answering for any handle. Facts written BEFORE
-        # that discovery stay live unless something sweeps them, so the sweep runs
-        # here rather than waiting to be noticed. Measured: the blocked set grew
-        # from 4 to 13 hosts over three runs, leaving 59 stale facts behind.
-        try:
-            import subprocess as _sp
-            _sw = _sp.run(["/root/hermes-agent/.venv/bin/python",
-                           "/root/.hermes/profiles/indigo/skills/ocas-weave/"
-                           "scripts/sweep_blocked_sites.py", "--apply"],
-                          capture_output=True, text=True, timeout=300)
-            for _l in (_sw.stdout or "").strip().splitlines()[-3:]:
-                log(f"  site sweep: {_l}")
-        except Exception as _e:  # noqa: BLE001
-            log(f"  site sweep skipped: {str(_e)[:70]}")
         log("Final Google Contacts sync...")
         sync_to_google()
 

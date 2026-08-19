@@ -94,6 +94,39 @@ def sync_inbound(token):
 
     _log(f"  Inbound: total Google contacts fetched: {len(contacts)}")
 
+    # Contacts weave links to that google did not return. The traversal is a FULL
+    # sync, so absence is meaningful -- but a partial fetch would look identical, so
+    # each candidate is verified individually and only a confirmed 404 is unlinked.
+    _seen_rns = {c.get("resourceName") for c in contacts if c.get("resourceName")}
+    _linked = weave.execute(
+        "SELECT id, name, google_resource_name FROM persons "
+        "WHERE google_resource_name IS NOT NULL AND google_resource_name <> ''")
+    _missing = [r for r in _linked if r["google_resource_name"] not in _seen_rns]
+    if _missing:
+        _log(f"  Inbound: {len(_missing)} weave row(s) link to a contact google did "
+             f"not return; verifying each")
+        _confirmed = 0
+        for _r in _missing[:100]:
+            _rn = _r["google_resource_name"]
+            try:
+                _api_get(f"{PEOPLE_API_BASE}/{_rn}?personFields=metadata", token,
+                         timeout=20)
+                continue                      # still exists; absence was a fetch gap
+            except urllib.error.HTTPError as _e:
+                if _e.code not in (403, 404):
+                    continue                  # inconclusive, leave it alone
+            except Exception:                 # noqa: BLE001
+                continue
+            # Confirmed gone. Keep the person row -- it owns facts and edges -- and
+            # clear only the dead link, so nothing re-pushes to a resourceName that
+            # no longer exists and the stale email stops matching a new contact.
+            weave.execute_write(
+                "UPDATE persons SET google_resource_name = NULL WHERE id = :id",
+                {"id": _r["id"]})
+            _confirmed += 1
+            _log(f"    unlinked {(_r['name'] or '?')[:32]} — {_rn} returns 404")
+        _log(f"  Inbound: unlinked {_confirmed} dead resource name(s)")
+
     # Build lookup maps from SQLite
     all_people = weave.execute(
         "SELECT id, google_resource_name, name, email, phone FROM persons"
@@ -144,7 +177,13 @@ def sync_inbound(token):
                     occupation = CASE WHEN occupation IS NULL OR occupation = '' THEN :title ELSE occupation END,
                     location_city = CASE WHEN location_city IS NULL OR location_city = '' THEN :city ELSE location_city END,
                     location_country = CASE WHEN location_country IS NULL OR location_country = '' THEN :country ELSE location_country END,
-                    google_resource_name = CASE WHEN google_resource_name IS NULL THEN :rn ELSE google_resource_name END,
+                    -- Adopt the resourceName google just returned. The old CASE kept
+                    -- a stale value and discarded the fresh one sitting in the same
+                    -- response, so a renamed contact (adding a verified email or a
+                    -- profile url renames it) stayed pointed at a dead name forever.
+                    google_resource_name = CASE
+                        WHEN :rn IS NOT NULL AND :rn <> '' THEN :rn
+                        ELSE google_resource_name END,
                     record_time = :now
                 WHERE id = :id
             """, {
@@ -327,6 +366,32 @@ def is_implausible_job_value(value):
         return True, "several values run together without a separator"
     return False, ""
 
+def _refresh_etags(resource_names, token):
+    """Current etag per resourceName, for retrying a batch rejected as stale.
+
+    A 400 failedPrecondition means the etag read at the start of the run no longer
+    matches. Returns {} entries only for contacts that still exist; a name absent
+    from the result has been deleted and must be dropped from the retry rather than
+    pushed blind.
+    """
+    out = {}
+    for i in range(0, len(resource_names), 50):
+        chunk = resource_names[i:i+50]
+        rn_param = "&resourceNames=".join(urllib.parse.quote(rn) for rn in chunk)
+        url = (f"{PEOPLE_API_BASE}/people:batchGet?resourceNames={rn_param}"
+               "&personFields=metadata&sources=READ_SOURCE_TYPE_CONTACT")
+        try:
+            resp = _api_get(url, token, timeout=30)
+            for person in resp.get("responses", []):
+                p = person.get("person", {})
+                if p.get("resourceName") and p.get("etag"):
+                    out[p["resourceName"]] = p["etag"]
+        except Exception as e:  # noqa: BLE001
+            _log(f"    etag refresh error at {i}: {e}")
+        time.sleep(0.3)
+    return out
+
+
 def sync_outbound(token, last_sync_at):
     """Push Weave changes TO Google Contacts via REST API + SQLite backend."""
     sys.path.insert(0, str(Path(__file__).parent))
@@ -336,6 +401,19 @@ def sync_outbound(token, last_sync_at):
 
     ckpt_path = AGENT_ROOT / "commons/db/ocas-weave/staging/outbound_ckpt.txt"
     pushed_set = set()
+    # The checkpoint is append-only and re-read in full every run. Collapse it to
+    # unique keys and rewrite, so it stops growing without changing its meaning.
+    try:
+        if ckpt_path.exists():
+            _lines = [l.strip() for l in ckpt_path.read_text().splitlines() if l.strip()]
+            _uniq = list(dict.fromkeys(_lines))
+            if len(_uniq) < len(_lines):
+                _tmp = ckpt_path.with_suffix(ckpt_path.suffix + ".tmp")
+                _tmp.write_text("\n".join(_uniq) + "\n")
+                _tmp.replace(ckpt_path)
+                _log(f"  Checkpoint compacted: {len(_lines)} -> {len(_uniq)} entries")
+    except Exception as _e:  # noqa: BLE001
+        _log(f"  Checkpoint compaction skipped: {_e}")
     if ckpt_path.exists():
         pushed_set = set(l for l in ckpt_path.read_text().strip().split("\n") if l)
         _log(f"  Outbound: resuming from checkpoint ({len(pushed_set)} already pushed)")
@@ -347,13 +425,21 @@ def sync_outbound(token, last_sync_at):
         JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact'
         JOIN persons p ON p.id = e.source_id
         WHERE p.record_time > :ts
-          AND f.predicate = 'scout_verification_note'
+          AND f.predicate IN ('linkedin', 'profile_linkedin', 'linkedin_url',
+                              'scout_verification_note')
           AND f.value LIKE '%linkedin.com/%'
     """, {"ts": last_sync_at})
     linkedin_map = {}
     for row in linkedin_rows:
         rn, pid, note = row["google_resource_name"], row["id"], row["value"]
         url_match = _re.search(r"(https?://[^\s]*linkedin\.com/in/[^\s]+)", note)
+        if not url_match:
+            # predicates 'linkedin' / 'profile_linkedin' store the bare url, often
+            # without a scheme; the old regex required https:// and matched none.
+            _bare = _re.search(r"([\w.-]*linkedin\.com/in/[^\s,;]+)", note)
+            if _bare:
+                note = "https://" + _bare.group(1).lstrip("/")
+                url_match = _re.search(r"(https?://[^\s]*linkedin\.com/in/[^\s]+)", note)
         if url_match:
             linkedin_map[rn or pid] = url_match.group(1)
 
@@ -408,6 +494,14 @@ def sync_outbound(token, last_sync_at):
             dup_skipped += 1
             continue
         to_create.append(r)
+        # Fold this row into the index so a second weave row for the same person
+        # later in the same pass is recognised as a duplicate rather than POSTed
+        # a second time.
+        if em:
+            g_emails.add(em)
+        _nn = _norm_name(r["name"] or "")
+        if _nn:
+            g_names.add(_nn)
     if dup_skipped:
         _log(f"  Outbound: {dup_skipped} create candidate(s) skipped — already in Google")
     if len(to_create) > MAX_CREATES_PER_RUN:
@@ -425,11 +519,30 @@ def sync_outbound(token, last_sync_at):
     all_creates = []
     skipped = 0
 
+    def existing_lookup(rn):
+        """The prefetched google contact for rn, or {} before the prefetch runs."""
+        try:
+            return existing_map.get(rn) or {}
+        except NameError:
+            return {}
+
     def build_contact_body(rn, given, family, email, phone, org, title, city, country, pid):
         phone_clean = _validate_phone(phone)
         body = {}
         if given or family:
-            body["names"] = [{"givenName": given or "", "familyName": family or ""}]
+            # Replacing the Name object deletes middleName, honorifics and every
+            # phonetic subfield. Carry the existing Name through and set only the
+            # two parts weave actually knows.
+            _prev_names = ((existing_lookup(rn) or {}).get("names") or [])
+            _base = dict(_prev_names[0]) if _prev_names else {}
+            _base.pop("metadata", None)
+            _base.pop("displayName", None)
+            _base.pop("displayNameLastFirst", None)
+            if given:
+                _base["givenName"] = given
+            if family:
+                _base["familyName"] = family
+            body["names"] = [_base]
         if email:
             email_entry = {"value": email}
             if email.lower().endswith("@gmail.com"):
@@ -496,8 +609,23 @@ def sync_outbound(token, last_sync_at):
         all_updates.append((r["google_resource_name"], body, [], r["id"]))
 
     for r in to_create:
+        # The gate ran only for updates, so a NEW contact could be created straight
+        # from inference. Same withholding applies here.
+        _inf = inferred_map.get(r["id"], {})
+        if _inf:
+            r = dict(r)
+            for _f in GATED_FIELDS:
+                if r.get(_f) and r[_f] in _inf.get(_f, ()):
+                    r[_f] = ""
+        # A create with no given/family produces a nameless entry in the address
+        # book that nothing can match on the way back in. Split the display name.
+        _g, _f2 = (r["name_given"] or ""), (r["name_family"] or "")
+        if not (_g or _f2) and (r["name"] or "").strip():
+            _parts = (r["name"] or "").strip().split()
+            _g = _parts[0]
+            _f2 = " ".join(_parts[1:]) if len(_parts) > 1 else ""
         body = build_contact_body(
-            r["google_resource_name"] or "", r["name_given"] or "", r["name_family"] or "",
+            r["google_resource_name"] or "", _g, _f2,
             r["email"] or "", r["phone"] or "", r["org"] or "", r["occupation"] or "",
             r["location_city"] or "", r["location_country"] or "", r["id"],
         )
@@ -512,10 +640,13 @@ def sync_outbound(token, last_sync_at):
     _log(f"  Outbound: fetching etags for {len(all_updates)} contacts...")
     rn_list = [rn for rn, *_ in all_updates]
     etag_map = {}
+    existing_map = {}
     for i in range(0, len(rn_list), 50):
         batch_rns = rn_list[i:i+50]
         rn_param = "&resourceNames=".join(urllib.parse.quote(rn) for rn in batch_rns)
-        url = f"{PEOPLE_API_BASE}/people:batchGet?resourceNames={rn_param}&personFields=metadata"
+        url = (f"{PEOPLE_API_BASE}/people:batchGet?resourceNames={rn_param}"
+                   "&personFields=metadata,emailAddresses,phoneNumbers,addresses,organizations,names,urls"
+                   "&sources=READ_SOURCE_TYPE_CONTACT")
         try:
             resp = _api_get(url, token, timeout=30)
             for person in resp.get("responses", []):
@@ -524,6 +655,9 @@ def sync_outbound(token, last_sync_at):
                 etag = p.get("etag", "")
                 if rn_val and etag:
                     etag_map[rn_val] = etag
+                    # keep the current multi-valued fields so the update merges
+                    # into them rather than replacing them
+                    existing_map[rn_val] = p
         except Exception as e:
             _log(f"    Etag batch error at {i}: {e}")
         time.sleep(0.3)
@@ -532,12 +666,28 @@ def sync_outbound(token, last_sync_at):
     # Batch update (200 per request)
     pushed = failed = stale = rate_limited = 0
     batch_url = f"{PEOPLE_API_BASE}/people:batchUpdateContacts"
-    ALL_FIELDS = "names,emailAddresses,phoneNumbers,organizations,addresses,biographies"
+    # 'biographies' removed: it is never set, and a masked field absent from the
+    # body is CLEARED, which wiped every contact's notes. 'urls' added, now that the
+    # url list is fetched and merged rather than replaced.
+    ALL_FIELDS = "names,emailAddresses,phoneNumbers,organizations,addresses,urls"
 
-    for i in range(0, len(all_updates), 200):
-        batch = all_updates[i:i+200]
-        batch_num = i // 200 + 1
-        total_batches = (len(all_updates) + 199) // 200
+    # Group by the exact set of fields each body carries. One mask governs a whole
+    # request and clears any masked field a contact omits, so contacts with
+    # different field sets must not share a request.
+    _by_sig = {}
+    for _rn, _body, _uf, _pid in all_updates:
+        _sig = tuple(sorted(k for k in _body.keys() if k != "etag"))
+        _by_sig.setdefault(_sig, []).append((_rn, _body, _uf, _pid))
+    _groups = []
+    for _sig, _rows in _by_sig.items():
+        for _j in range(0, len(_rows), 200):
+            _groups.append((_sig, _rows[_j:_j+200]))
+    _log(f"  Outbound: {len(all_updates)} updates in {len(_groups)} "
+         f"field-signature group(s)")
+
+    for _gi, (_sig, batch) in enumerate(_groups):
+        batch_num = _gi + 1
+        total_batches = len(_groups)
 
         contacts_map = {}
         batch_pids = {}
@@ -546,6 +696,34 @@ def sync_outbound(token, last_sync_at):
             if not etag:
                 continue
             body["etag"] = etag
+            # Google REPLACES a masked list field, and weave holds only one
+            # value per contact, so sending it alone deletes the rest. Merge.
+            _prev = existing_map.get(rn) or {}
+            def _addr_key(a):
+                # build_contact_body never sets formattedValue, so keying on it
+                # made every address comparison compare "" and the merge silently
+                # echoed google's existing address back, discarding the new one.
+                return "|".join(str(a.get(k) or "").strip().lower()
+                                for k in ("city", "region", "countryCode", "country",
+                                          "streetAddress", "postalCode"))
+            for _f, _keyfn in (("emailAddresses", lambda e: str(e.get("value") or "").strip().lower()),
+                               ("phoneNumbers",  lambda e: str(e.get("value") or "").strip().lower()),
+                               ("addresses",     _addr_key),
+                               # company name only: keying on name+title appended a
+                               # duplicate whenever weave lacked the title google had
+                               ("organizations", lambda e: str(e.get("name") or "").strip().lower()),
+                               ("urls", lambda e: str(e.get("value") or "").strip().lower().rstrip("/"))):
+                if _f not in body:
+                    continue
+                # metadata is output-only; do not echo google's source ids back
+                _have = [{k: v for k, v in dict(h).items() if k != "metadata"}
+                         for h in (_prev.get(_f) or [])]
+                _add = []
+                for _entry in body[_f]:
+                    _v = _keyfn(_entry)
+                    if _v.strip("|") and not any(_keyfn(h) == _v for h in _have):
+                        _add.append(_entry)
+                body[_f] = _have + _add
             contacts_map[rn] = body
             batch_pids[rn] = pid
 
@@ -553,7 +731,20 @@ def sync_outbound(token, last_sync_at):
             _log(f"  Batch {batch_num}: no valid contacts (all missing etags)")
             continue
 
-        req_body = {"contacts": contacts_map, "updateMask": ALL_FIELDS}
+        # Name only fields the bodies actually carry. ALL_FIELDS listed
+        # 'biographies', which is never set, and a masked field missing from
+        # the body is CLEARED -- so every update wiped the contact's notes.
+        # Exactly the fields this group's bodies carry -- nothing else, so no
+        # field can be cleared by being masked without a value.
+        _mask = ",".join(f for f in ALL_FIELDS.split(",") if f in set(_sig))
+        if not _mask:
+            _log(f"  Batch {batch_num}: no updatable fields; skipped")
+            continue
+        # readMask is required for updateResult to be returned at all; without it
+        # the per-contact status handling below is unreachable and every contact
+        # is recorded as pushed regardless of what happened.
+        req_body = {"contacts": contacts_map, "updateMask": _mask,
+                    "readMask": _mask}
         attempt = 0
         backoff = 5.0
         while attempt < 4:
@@ -603,6 +794,26 @@ def sync_outbound(token, last_sync_at):
                     except Exception:
                         err = str(e)
                     _log(f"  Batch {batch_num} HTTP 400: {err[:200]}")
+                    # The docs: a stale etag returns 400 failedPrecondition and
+                    # "clients should get the latest person and merge their updates
+                    # into the latest person". Etags were read before the earlier
+                    # batches posted, so one refresh-and-retry recovers the common
+                    # case of the owner editing a contact mid-run.
+                    if "failedprecondition" in err.lower() or "etag" in err.lower():
+                        if attempt < 3:
+                            _log(f"  Batch {batch_num}: refreshing etags and retrying")
+                            _fresh = _refresh_etags(list(contacts_map.keys()), token)
+                            _dropped = 0
+                            for _rn in list(contacts_map.keys()):
+                                if _fresh.get(_rn):
+                                    contacts_map[_rn]["etag"] = _fresh[_rn]
+                                else:
+                                    contacts_map.pop(_rn, None); _dropped += 1
+                            if _dropped:
+                                _log(f"    dropped {_dropped} contact(s) with no fresh etag")
+                            if contacts_map:
+                                req_body["contacts"] = contacts_map
+                                continue
                     failed += len(contacts_map)
                     break
                 else:
@@ -621,7 +832,17 @@ def sync_outbound(token, last_sync_at):
         if pid in pushed_set:
             continue
         try:
-            _api_post(create_url, token, body, timeout=30)
+            _resp = _api_post(create_url, token, body, timeout=30)
+            # The response carries the only handle for mutating this contact later.
+            # Discarding it left the new contact permanently unlinked from weave.
+            _new_rn = (_resp or {}).get("resourceName") or ""
+            if _new_rn:
+                weave.execute_write(
+                    "UPDATE persons SET google_resource_name = :rn WHERE id = :id",
+                    {"rn": _new_rn, "id": pid})
+                _log(f"  Created and linked {pid} -> {_new_rn}")
+            else:
+                _log(f"  Created {pid} but response carried no resourceName")
             created_count += 1
             with open(ckpt_path, "a") as f:
                 f.write(pid + "\n")

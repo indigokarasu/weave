@@ -1313,11 +1313,38 @@ _BIO_BOILERPLATE = (
 )
 
 
-def _is_boilerplate_bio(text):
+# A platform title announcing that someone has an account there. The name and handle
+# vary per contact, so a fixed-phrase list cannot catch it; the SHAPE is the signal.
+_BIO_PLATFORM_TITLE = re.compile(
+    r"\bis on (snapchat|tiktok|instagram|facebook|twitter|threads|x)\b"
+    r"|\bjoin (me|us) on\b"
+    r"|\bwatch .{0,30}\bon (tiktok|youtube|snapchat)\b"
+    r"|\b(profile|page) on \w+ *[.!]?$"
+    r"|\bsee photos and videos\b",
+    re.I)
+
+
+def _is_boilerplate_bio(text, person_name="", handle=""):
+    """True when the text carries nothing about the person.
+
+    Beyond the fixed phrases, rejects a platform page title -- '<Name> is on
+    Snapchat! (@<handle>)' -- which restates the name and handle already known and
+    was being stored as a bio for 37 contacts.
+    """
     t = (text or "").strip().lower()
     if len(t) < 12:
         return True
-    return any(b in t for b in _BIO_BOILERPLATE)
+    if any(b in t for b in _BIO_BOILERPLATE):
+        return True
+    if _BIO_PLATFORM_TITLE.search(t):
+        return True
+    # Almost entirely the contact's own name and handle echoed back.
+    stripped = t
+    for tok in (person_name or "").lower().split() + [(handle or "").lower()]:
+        if len(tok) > 2:
+            stripped = stripped.replace(tok, " ")
+    stripped = re.sub(r"[^a-z]+", "", stripped)
+    return len(stripped) < 8
 
 
 def _ensure_fact_validity_columns(weave):
@@ -1505,7 +1532,8 @@ def store_scout_findings(contact_id, res, person_name="", db_path=None,
         plat = (p.get("site") or "").strip().lower()
         if plat and url:
             _add(f"profile_{plat}", url, url, conf)
-        if not _is_boilerplate_bio(p.get("bio", "")):
+        if not _is_boilerplate_bio(p.get("bio", ""), person_name,
+                                   p.get("handle", "")):
             _add("bio_summary", p["bio"].strip(), url or "scout_osint", conf)
         if p.get("location", "").strip():
             _add("location_city", p["location"].strip(), url, conf * 0.9)

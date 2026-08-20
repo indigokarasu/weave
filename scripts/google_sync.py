@@ -459,29 +459,72 @@ def sync_outbound(token, last_sync_at):
         _log(f"  Outbound: resuming from checkpoint ({len(pushed_set)} already pushed)")
 
     # Find contacts with Fact-sourced LinkedIn URLs
+    # Every verified profile url, not just LinkedIn. Invalidated facts are
+    # excluded so anything a sweep retired stays retired.
     linkedin_rows = weave.execute("""
-        SELECT p.google_resource_name, p.id, f.value
+        SELECT p.google_resource_name, p.id, f.value, f.predicate
         FROM facts f
         JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact'
         JOIN persons p ON p.id = e.source_id
         WHERE p.record_time > :ts
-          AND f.predicate IN ('linkedin', 'profile_linkedin', 'linkedin_url',
-                              'scout_verification_note')
-          AND f.value LIKE '%linkedin.com/%'
+          AND f.valid_until IS NULL
+          AND (f.predicate LIKE 'profile_%' OR f.predicate IN
+               ('linkedin', 'linkedin_url', 'website'))
+          AND f.value LIKE '%.%'
     """, {"ts": last_sync_at})
+    # host -> the label google shows for the link
+    _URL_LABEL = {
+        "linkedin.com": "LinkedIn", "github.com": "GitHub", "medium.com": "Medium",
+        "twitter.com": "Twitter", "x.com": "X", "instagram.com": "Instagram",
+        "youtube.com": "YouTube", "behance.net": "Behance", "substack.com": "Substack",
+        "tiktok.com": "TikTok", "dribbble.com": "Dribbble", "bsky.app": "Bluesky",
+        "soundcloud.com": "SoundCloud", "vimeo.com": "Vimeo", "calendly.com": "Calendly",
+        "about.me": "About.me", "mastodon.social": "Mastodon",
+    }
+    try:
+        import json as _json
+        _blocked = {h for h, v in _json.load(open(
+            os.path.expanduser("~/.hermes/commons/data/ocas-scout/soft404-sites.json")
+        )).items() if v.get("answers_for_any")}
+    except Exception:  # noqa: BLE001
+        _blocked = set()
+
+    def _url_host(u):
+        s = (u or "").strip().lower()
+        for p in ("https://", "http://"):
+            if s.startswith(p):
+                s = s[len(p):]
+        return s.split("/")[0].replace("www.", "")
+
     linkedin_map = {}
+    _url_skipped = 0
     for row in linkedin_rows:
-        rn, pid, note = row["google_resource_name"], row["id"], row["value"]
-        url_match = _re.search(r"(https?://[^\s]*linkedin\.com/in/[^\s]+)", note)
-        if not url_match:
-            # predicates 'linkedin' / 'profile_linkedin' store the bare url, often
-            # without a scheme; the old regex required https:// and matched none.
-            _bare = _re.search(r"([\w.-]*linkedin\.com/in/[^\s,;]+)", note)
-            if _bare:
-                note = "https://" + _bare.group(1).lstrip("/")
-                url_match = _re.search(r"(https?://[^\s]*linkedin\.com/in/[^\s]+)", note)
-        if url_match:
-            linkedin_map[rn or pid] = url_match.group(1)
+        rn, pid, val = row["google_resource_name"], row["id"], (row["value"] or "").strip()
+        if not val or "." not in val:
+            continue
+        u = val if val.startswith(("http://", "https://")) else "https://" + val.lstrip("/")
+        host = _url_host(u)
+        # a host that answers for any handle attributes nothing, so its "profile"
+        # must not be written into the owner's real address book
+        if any(b in host for b in _blocked):
+            _url_skipped += 1
+            continue
+        label = next((lbl for h, lbl in _URL_LABEL.items() if h in host), None)
+        entry = {"value": u}
+        if label:
+            entry["type"] = label
+        for key in (rn, pid):
+            if not key:
+                continue
+            bucket = linkedin_map.setdefault(key, [])
+            if not any((e.get("value") or "").rstrip("/").lower() == u.rstrip("/").lower()
+                       for e in bucket):
+                bucket.append(entry)
+    if _url_skipped:
+        _log(f"  Outbound: {_url_skipped} url(s) withheld — host answers for any handle")
+    _log(f"  Outbound: {sum(len(v) for v in linkedin_map.values())} profile url(s) "
+         f"across {len(linkedin_map)} key(s) eligible to push")
+
 
     # Find records modified since last sync
     rows = weave.execute("""
@@ -624,9 +667,11 @@ def sync_outbound(token, last_sync_at):
             if country and "countryCode" not in address:
                 address["countryCode"] = country
             body["addresses"] = [address]
-        linkedin_url = linkedin_map.get(rn, linkedin_map.get(pid))
-        if linkedin_url:
-            body["urls"] = [{"value": linkedin_url, "formattedType": "LinkedIn"}]
+        _urls = linkedin_map.get(rn) or linkedin_map.get(pid) or []
+        if _urls:
+            # merged against google's existing list at batch assembly, so the
+            # contact's own entries are preserved and only new ones append
+            body["urls"] = list(_urls)
         return body
 
     for r in to_update:

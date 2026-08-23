@@ -25,12 +25,18 @@ import urllib.parse
 import uuid
 from datetime import datetime, timezone
 
+# one canonical form for every path that reads or writes a contact URL
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from url_norm import canonical_url, dedupe_key as _dedupe_key  # noqa: E402
+
 FACT_SOURCE_TYPE = "google_contacts"
 FACT_CONFIDENCE = 0.95
 
 # host suffix -> fact predicate
 _PLATFORMS = [
-    ("linkedin.com", "linkedin"),
+    ("linkedin.com", "profile_linkedin"),
     ("github.com", "profile_github"),
     ("twitter.com", "profile_twitter"),
     ("x.com", "profile_twitter"),
@@ -66,36 +72,20 @@ def classify_url(raw):
     Canonicalization lowercases the host and drops 'www.', but PRESERVES path,
     query and fragment — those can carry the identity.
     """
-    if not raw or not isinstance(raw, str):
+    canonical = canonical_url(raw)
+    if not canonical:
         return None, None
-    url = raw.strip().strip('"').strip("'")
-    if not url or url.lower().startswith(_BAD_SCHEMES):
-        return None, None
-    if "://" not in url:
-        url = "https://" + url
-    try:
-        p = urllib.parse.urlsplit(url)
-    except Exception:
-        return None, None
-    host = (p.netloc or "").lower().split("@")[-1].split(":")[0]
-    if not host or "." not in host:
-        return None, None
-    if host.startswith("www."):
-        host = host[4:]
-    scheme = "https" if p.scheme in ("http", "https", "") else p.scheme
-    if scheme not in ("http", "https"):
-        return None, None
-
+    p = urllib.parse.urlsplit(canonical)
+    host = p.netloc
     path = p.path.rstrip("/")
-    canonical = urllib.parse.urlunsplit((scheme, host, path or "/", p.query, p.fragment))
 
     for suffix, predicate in _PLATFORMS:
         if host == suffix or host.endswith("." + suffix):
             segs = [s for s in path.split("/") if s]
-            if predicate == "linkedin":
+            if predicate == "profile_linkedin":
                 # Only personal profiles. /company/, /school/, /pub/dir/ are not people.
                 if len(segs) >= 2 and segs[0] == "in":
-                    return "linkedin", canonical
+                    return "profile_linkedin", canonical
                 return None, None
             if predicate == "profile_github":
                 if len(segs) == 1 and segs[0].lower() not in _GITHUB_RESERVED:
@@ -178,10 +168,25 @@ def store_signals(con, person_id, signals, dry_run=False):
         existing = {(r["predicate"], r["value"]) for r in con.execute(
             "SELECT f.predicate, f.value FROM facts f JOIN edges e ON e.target_id=f.id "
             "WHERE e.source_id=? AND e.rel_type='HasFact'", (person_id,))}
+        # A URL this pipeline pushed to google comes back on the next inbound and
+        # would be stored AGAIN as `website`, sourced google_contacts -- relabelling
+        # our own guess as owner-curated data. Skip any url already held under a
+        # profile_* predicate for this person.
+        _held = set()
+        for _r in con.execute(
+                "SELECT f.value FROM facts f JOIN edges e ON e.target_id=f.id "
+                "WHERE e.source_id=? AND e.rel_type='HasFact' "
+                "AND f.predicate LIKE 'profile\\_%' ESCAPE '\\'", (person_id,)):
+            _k = _dedupe_key(_r["value"])
+            if _k:
+                _held.add(_k)
         now = _now()
         for predicate, value in signals["facts"]:
             if (predicate, value) in existing:
                 stats["existing"] += 1
+                continue
+            if predicate == "website" and _dedupe_key(value) in _held:
+                stats["existing"] += 1      # already held as a profile_* url
                 continue
             fid = str(uuid.uuid4())
             con.execute(
@@ -249,7 +254,7 @@ if __name__ == "__main__":
     if a.people_json:
         people = json.load(open(a.people_json))
     else:
-        sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+        sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
         import urllib.request
         import google_sync as G
         tok = G.get_access_token()

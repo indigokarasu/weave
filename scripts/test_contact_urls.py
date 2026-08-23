@@ -43,7 +43,7 @@ def facts_of(path, pid="p1"):
 
 def test_linkedin_personal_profile():
     p, u = classify_url("https://www.linkedin.com/in/rheaott")
-    assert (p, u) == ("linkedin", "https://linkedin.com/in/rheaott"), (p, u)
+    assert (p, u) == ("profile_linkedin", "https://linkedin.com/in/rheaott"), (p, u)
 
 
 def test_linkedin_company_rejected():
@@ -51,13 +51,14 @@ def test_linkedin_company_rejected():
     assert classify_url("https://linkedin.com/school/mit") == (None, None)
 
 
-def test_linkedin_query_params_preserved_not_person_breaking():
+def test_linkedin_tracking_params_dropped_identity_kept():
     p, u = classify_url("https://www.linkedin.com/in/rheaott?trk=abc")
-    assert p == "linkedin" and "rheaott" in u
+    assert p == "profile_linkedin", p
+    assert u == "https://linkedin.com/in/rheaott", u   # ?trk= is telemetry
 
 
 def test_github_user_vs_reserved():
-    assert classify_url("https://github.com/wrenkeeley")[0] == "profile_github"
+    assert classify_url("https://github.com/larkfielding")[0] == "profile_github"
     assert classify_url("https://github.com/features")[0] is None
     assert classify_url("https://github.com/features/copilot")[0] is None
 
@@ -76,7 +77,7 @@ def test_junk_schemes_rejected():
 
 def test_generic_website():
     p, u = classify_url("jacobward.com")
-    assert p == "website" and u == "https://jacobward.com/"
+    assert p == "website" and u == "https://jacobward.com", u
 
 
 def test_credentials_host_normalized():
@@ -102,9 +103,9 @@ def test_extract_dedups_and_picks_website():
         {"value": "https://rheaott.com"},
         {"value": "mailto:x@y.com"},
     ], "biographies": [{"value": "  "}]})
-    assert ("linkedin", "https://linkedin.com/in/rheaott") in sig["facts"]
-    assert sum(1 for p, _ in sig["facts"] if p == "linkedin") == 1
-    assert sig["website"] == "https://rheaott.com/"
+    assert ("profile_linkedin", "https://linkedin.com/in/rheaott") in sig["facts"]
+    assert sum(1 for p, _ in sig["facts"] if p == "profile_linkedin") == 1
+    assert sig["website"] == "https://rheaott.com", sig["website"]
     assert not any(p == "bio_summary" for p, _ in sig["facts"]), "blank bio skipped"
 
 

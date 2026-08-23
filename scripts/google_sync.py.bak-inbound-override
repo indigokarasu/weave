@@ -63,33 +63,6 @@ def _validate_phone(phone):
     return cleaned
 
 
-def _build_override_check(weave):
-    """(person_id, field, incoming) -> 1 when the stored value may be replaced.
-
-    1 only when the value currently in weave is one ENRICHMENT put there and
-    Google is offering something different and non-empty. An owner-entered value
-    never appears in the inferred set, so it is never overwritten.
-    """
-    inferred = _inferred_field_values(weave)
-    cache = {}
-
-    def _ovr(pid, field, incoming):
-        inc = (incoming or "").strip()
-        if not inc:
-            return 0
-        if pid not in cache:
-            r = weave.execute(
-                "SELECT org, occupation, location_city, location_country "
-                "FROM persons WHERE id = :id", {"id": pid})
-            cache[pid] = dict(r[0]) if r else {}
-        cur = ((cache[pid].get(field) or "")).strip()
-        if not cur or cur == inc:
-            return 0
-        return 1 if cur in (inferred.get(pid, {}).get(field) or ()) else 0
-
-    return _ovr
-
-
 def sync_inbound(token):
     """Pull contacts FROM Google INTO Weave using REST API + SQLite backend."""
     now = datetime.now(timezone.utc).isoformat()
@@ -173,7 +146,6 @@ def sync_inbound(token):
             phone_map[phone] = pid
 
     upserted = enriched = created = skipped = 0
-    _ovr = _build_override_check(weave)
     for c in contacts:
         rn = c.get("resourceName", "")
         name_data = (c.get("names") or [{}])[0] if c.get("names") else {}
@@ -203,22 +175,10 @@ def sync_inbound(token):
                     name_family = CASE WHEN name_family IS NULL OR name_family = '' THEN :family ELSE name_family END,
                     email = CASE WHEN email IS NULL OR email = '' THEN :email ELSE email END,
                     phone = CASE WHEN phone IS NULL OR phone = '' THEN :phone ELSE phone END,
-                    -- Fill when empty, and ALSO overwrite when what is stored
-                    -- was INFERRED and Google now says something different.
-                    --
-                    -- Fill-only alone made the owner's own corrections unusable:
-                    -- fixing a wrong employer in Google Contacts changed nothing
-                    -- here, because the column was non-empty. Together with the
-                    -- outbound gate -- which withholds inferred values from the
-                    -- push -- a bad guess became unfixable from either side.
-                    -- Peter Arcuni kept occupation 'Listen to the Business Wars
-                    -- podcast' for exactly that reason.
-                    -- An owner-entered value is never touched: :ovr_* is 1 only
-                    -- when the CURRENT value is one enrichment wrote.
-                    org = CASE WHEN org IS NULL OR org = '' OR :ovr_org = 1 THEN :org ELSE org END,
-                    occupation = CASE WHEN occupation IS NULL OR occupation = '' OR :ovr_title = 1 THEN :title ELSE occupation END,
-                    location_city = CASE WHEN location_city IS NULL OR location_city = '' OR :ovr_city = 1 THEN :city ELSE location_city END,
-                    location_country = CASE WHEN location_country IS NULL OR location_country = '' OR :ovr_country = 1 THEN :country ELSE location_country END,
+                    org = CASE WHEN org IS NULL OR org = '' THEN :org ELSE org END,
+                    occupation = CASE WHEN occupation IS NULL OR occupation = '' THEN :title ELSE occupation END,
+                    location_city = CASE WHEN location_city IS NULL OR location_city = '' THEN :city ELSE location_city END,
+                    location_country = CASE WHEN location_country IS NULL OR location_country = '' THEN :country ELSE location_country END,
                     -- Adopt the resourceName google just returned. The old CASE kept
                     -- a stale value and discarded the fresh one sitting in the same
                     -- response, so a renamed contact (adding a verified email or a
@@ -232,10 +192,6 @@ def sync_inbound(token):
                 "id": pid, "name": name, "given": given, "family": family,
                 "email": email, "phone": phone, "org": org, "title": title_val,
                 "city": city, "country": country, "rn": rn, "now": now,
-                "ovr_org": _ovr(pid, "org", org),
-                "ovr_title": _ovr(pid, "occupation", title_val),
-                "ovr_city": _ovr(pid, "location_city", city),
-                "ovr_country": _ovr(pid, "location_country", country),
             })
             enriched += 1
         else:

@@ -68,7 +68,6 @@ def get_contacts_needing_enrichment():
     from weave_sqlite import WeaveDB
     weave = WeaveDB(SQLITE_DB)
 
-    _all = 1 if os.environ.get("WEAVE_ENRICH_ALL") == "1" else 0
     rows = weave.execute("""
         SELECT id, name, name_given, name_family, email, phone,
                org, occupation, location_city, location_country,
@@ -82,24 +81,13 @@ def get_contacts_needing_enrichment():
           AND COALESCE(is_pseudo, 0) IN (0, '')
           AND COALESCE(is_archived, 0) IN (0, '')
           AND COALESCE(is_deceased, 0) IN (0, '')
-          -- Three filters that hold only in normal operation. With
-          -- WEAVE_ENRICH_ALL=1 each is neutralised by the bound flag, because
-          -- each one turned out to exclude contacts that DO need the work:
-          --   * confidence >= 0.9 is self-assigned -- 267 of those rows came
-          --     from a bulk import and 25 from the pipeline itself, and 105 of
-          --     them still have empty fields.
-          --   * "no gaps" only means some earlier version already filled them,
-          --     and those versions wrote payload blobs, name-matched strangers
-          --     and uncorroborated employers.
-          -- The pseudo/archived/deceased exclusions above are NOT overridable
-          -- here; they are about who may be researched, not about data quality.
-          AND (? = 1 OR (source_type IS NULL OR (source_type != 'user_provided' AND source_type != 'user_correction')))
-          AND (? = 1 OR (confidence IS NULL OR confidence < 0.9))
-          AND (? = 1 OR ((org IS NULL OR org = '')
+          AND (source_type IS NULL OR (source_type != 'user_provided' AND source_type != 'user_correction'))
+          AND (confidence IS NULL OR confidence < 0.9)
+          AND ((org IS NULL OR org = '')
             OR (occupation IS NULL OR occupation = '')
             OR (location_city IS NULL OR location_city = '')
             OR (email IS NULL OR email = '')
-            OR (phone IS NULL OR phone = '')))
+            OR (phone IS NULL OR phone = ''))
         -- Richer contacts first: every known field is an identity anchor for the
         -- scout queries and the LLM gate, so data-rich contacts are the LIKELIEST
         -- to match well -- the opposite of the old behavior, which skipped them.
@@ -118,19 +106,12 @@ def get_contacts_needing_enrichment():
                 + (email IS NOT NULL AND email != '')
                 + (phone IS NOT NULL AND phone != '')) DESC,
                 record_time DESC
-    """, (_all, _all, _all))
+    """)
 
     contacts = []
     for row in rows:
         contact = dict(row)
         contact["gaps"] = [f for f in ["org", "occupation", "location_city", "email", "phone"] if not contact.get(f)]
-        # A record with no empty field has nothing to FILL, but its values may
-        # still have come from a version that fabricated them. In enrich-all mode
-        # every field is re-verified instead; the write path is fill-only, so
-        # this adds freshly-gated facts to the graph rather than overwriting the
-        # record.
-        if _all and not contact["gaps"]:
-            contact["gaps"] = ["org", "occupation", "location_city", "email", "phone"]
         contacts.append(contact)
     return contacts
 
@@ -424,11 +405,7 @@ def main():
 
     now = datetime.now(timezone.utc)
 
-    _ignore_cd = os.environ.get("WEAVE_IGNORE_COOLDOWN") == "1"
-
     def off_cooldown(c):
-        if _ignore_cd:
-            return True
         prev = recent.get(c["id"])
         if prev is None:
             return True

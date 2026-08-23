@@ -188,8 +188,8 @@ def test_anchor_gate_junk_family_name_does_not_rescue():
 # ── Email-anchor OSINT ────────────────────────────────────────────────────
 
 def test_email_handle_distinctive_local():
-    # The exact case Jared cited: wrenkeeley@fastmail.com must yield 'wrenkeeley'.
-    assert email_handle_variants("wrenkeeley@fastmail.com") == ["wrenkeeley"]
+    # A distinctive single-token local part must pass through verbatim.
+    assert email_handle_variants("larkfielding@fastmail.com") == ["larkfielding"]
 
 
 def test_email_handle_dotted_local_expands():
@@ -200,7 +200,7 @@ def test_email_handle_dotted_local_expands():
 
 
 def test_email_handle_strips_plus_addressing():
-    assert email_handle_variants("wrenkeeley+news@gmail.com") == ["wrenkeeley"]
+    assert email_handle_variants("larkfielding+news@gmail.com") == ["larkfielding"]
 
 
 def test_email_handle_rejects_generic_and_short():
@@ -212,8 +212,8 @@ def test_email_handle_rejects_generic_and_short():
 
 
 def test_parse_github_api_user_real_shape():
-    # The actual wrenkeeley response shape.
-    body = ('{"login":"wrenkeeley","name":"Wren Jane Keeley",'
+    # The real-world response shape.
+    body = ('{"login":"larkfielding","name":"Wren Jane Keeley",'
             '"company":"University of Miami","location":"Miami",'
             '"blog":"https://microlydee.wordpress.com/","bio":"bioinformatics","email":null}')
     f = parse_github_api_user(body)

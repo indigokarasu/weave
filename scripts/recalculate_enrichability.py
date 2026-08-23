@@ -140,16 +140,22 @@ def recalculate_enrichability(weave, contact_id):
         return new_score
 
     # Delete old score, write new
+    # Delete the EDGES as well as the facts. Deleting only the facts left one
+    # edge per contact per night pointing at a row that no longer existed --
+    # 25,585 of them, 65.6% of every HasFact edge in the store.
     try:
-        weave.execute_write("""
-            DELETE FROM facts WHERE id IN (
-                SELECT f.id FROM facts f
-                JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact'
-                WHERE e.source_id = :id AND f.predicate = 'enrichability_score'
-            )
-        """, {"id": contact_id})
-    except Exception:
-        pass
+        _old = [r["id"] for r in weave.execute("""
+            SELECT f.id FROM facts f
+            JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact'
+            WHERE e.source_id = :id AND f.predicate = 'enrichability_score'
+        """, {"id": contact_id})]
+        for _fid in _old:
+            weave.execute_write(
+                "DELETE FROM edges WHERE target_id = :fid AND rel_type = 'HasFact'",
+                {"fid": _fid})
+            weave.execute_write("DELETE FROM facts WHERE id = :fid", {"fid": _fid})
+    except Exception as _e:  # noqa: BLE001
+        log(f"  enrichability: could not replace old score for {contact_id}: {_e}")
 
     now = datetime.now(timezone.utc).isoformat()
     fid = str(uuid.uuid4())

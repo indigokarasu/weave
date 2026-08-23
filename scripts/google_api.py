@@ -19,7 +19,7 @@ if set(sys.argv[1:]) & _HELP_ARGS:
 
 
 
-CREDS_DIR = os.environ.get("WORKSPACE_MCP_CREDENTIALS_DIR", "/root/.google_workspace_mcp/credentials")
+CREDS_DIR = os.environ.get("WORKSPACE_MCP_CREDENTIALS_DIR", os.path.join(os.path.expanduser("~"), ".google_workspace_mcp", "credentials"))
 OPERATOR_EMAIL = os.environ.get("OCAS_OPERATOR_EMAIL", "operator_email")
 TOKEN_PATH = Path(CREDS_DIR) / f"{OPERATOR_EMAIL}.json"
 PEOPLE_API_BASE = 'https://people.googleapis.com/v1'

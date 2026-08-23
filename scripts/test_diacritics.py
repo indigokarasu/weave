@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 """Diacritics are folded for MATCHING only, never in stored or transmitted values.
 
 Folding accents made accented names matchable at all -- they were previously mangled
@@ -8,12 +9,12 @@ google, and in every stored fact. A future change that folds on a write path fai
 here rather than quietly flattening 19 people's names.
 """
 import sys, sqlite3, unicodedata
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-scout/scripts")
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-scout/scripts"))
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 from _normalize import fold_accents, normalize_name
 from research_person import _name_phrase_in_text, _name_agreement
 
-DB = "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite"
+DB = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite")
 fails = 0
 
 def check(label, ok, detail=""):

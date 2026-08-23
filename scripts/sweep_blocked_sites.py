@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 """Stop serving facts sourced from sites that give no information.
 
 Driven by the measured verdicts in the probe cache rather than a hand-written
@@ -13,9 +14,9 @@ import sqlite3
 import sys
 from datetime import datetime, timezone
 
-DB = "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite"
-CACHE = "/root/.hermes/commons/data/ocas-scout/soft404-sites.json"
-AUDIT = "/root/.hermes/profiles/indigo/commons/data/ocas-weave/quarantine-template-sites.json"
+DB = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite")
+CACHE = os.path.join(os.environ.get("AGENT_ROOT", os.path.join(os.path.expanduser("~"), ".hermes")), "commons/data/ocas-scout/soft404-sites.json")
+AUDIT = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave/quarantine-template-sites.json")
 APPLY = "--apply" in sys.argv
 
 verdicts = json.load(open(CACHE))

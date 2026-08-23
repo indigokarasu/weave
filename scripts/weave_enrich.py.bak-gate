@@ -31,8 +31,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from employer_gate import corroborate as _corroborate_employer
-
 _HELP_ARGS = {"--help", "-h"}
 if set(sys.argv[1:]) & _HELP_ARGS:
     print((__doc__ or "").strip() or "Usage: python3 weave_enrich.py")
@@ -1308,43 +1306,6 @@ _IDENTITY_ORDER = {"high": 3, "med": 2, "low": 1, "none": 0, "error": 0}
 # emails, or social profiles, all valid at once.
 SINGLE_VALUED_PREDICATES = {"org", "occupation", "pronouns"}
 
-
-def _employer_supported(weave, contact_id, org):
-    """Does anything besides the crawler place this contact at this employer?
-
-    A guessed job title is a guess about a person; a guessed EMPLOYER reads as a
-    checkable fact and travels straight into the address book, so it is held to
-    a higher bar. The fact itself is still written with its provenance -- this
-    only governs whether it reaches the visible contact record.
-
-    Returns the supporting signal, or None.
-    """
-    email, vals = "", []
-    try:
-        rows = weave.execute("SELECT email FROM persons WHERE id = ?", (contact_id,))
-        if rows:
-            email = (rows[0]["email"] or "") if "email" in rows[0].keys() \
-                else (rows[0].get("email") or "")
-    except Exception:
-        pass
-    try:
-        vals = [str(r["value"] or "") for r in weave.execute(
-            "SELECT f.value AS value FROM facts f JOIN edges e "
-            "ON e.target_id = f.id AND e.rel_type = 'HasFact' "
-            "WHERE e.source_id = ? AND f.valid_until IS NULL", (contact_id,))]
-    except Exception:
-        pass
-    urls = [v for v in vals if "://" in v or v.lower().startswith("www.")]
-    other = [v for v in vals if v not in urls]
-    # every address they are known at, not just the column: the corroborating
-    # domain is often on a secondary work address.
-    emails = [email] + [v for v in other if "@" in v and " " not in v.strip()]
-    for em in emails:
-        why = _corroborate_employer(org, em, urls, other)
-        if why:
-            return why
-    return None
-
 _BIO_BOILERPLATE = (
     "welcome to my scheduling page", "please follow the instructions",
     "this account is private", "page not found", "sign up", "log in",
@@ -1796,14 +1757,6 @@ def store_scout_findings(contact_id, res, person_name="", db_path=None,
                 continue
             was_ours = existing in superseded_old.get(col, [])
             if not existing or was_ours:
-                # An employer nothing else confirms stays in the graph as a
-                # sourced hypothesis and off the record that syncs to Google.
-                if col == "org":
-                    why = _employer_supported(weave, contact_id, new_val)
-                    if not why:
-                        written.append("org:held(uncorroborated)")
-                        continue
-                    written.append("org:ok(%s)" % why)
                 set_parts.append(f"{col} = ?")
                 params.append(new_val)
                 touched.append(col)

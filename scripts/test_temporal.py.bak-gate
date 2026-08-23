@@ -14,7 +14,7 @@ import tempfile
 import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-FIX = os.environ.get("WEAVE_ENRICH_DIR", HERE)
+FIX = "/Users/jaredzimmerman/temp/weave-enrich-fix"
 sys.path.insert(0, HERE)          # weave_sqlite.py (with schema edit)
 sys.path.insert(0, FIX)           # weave_enrich.py (with temporal logic)
 
@@ -86,11 +86,6 @@ def test_single_valued_job_change_supersedes():
     path, db = _fresh_db()
     old_fid = _seed_fact(db, "org", "OldCorp")
     db.execute_write("UPDATE persons SET org='OldCorp' WHERE id=?", (CID,))
-    # The contact record only accepts an employer something else confirms, so
-    # give this one the confirming signal a real job change would carry. Without
-    # it the supersede still happens in the graph but stops at the node -- which
-    # is the case the next test covers.
-    db.execute_write("UPDATE persons SET email='t@newcorp.com' WHERE id=?", (CID,))
 
     n, lvl, written = weave_enrich.store_scout_findings(
         CID, _research(enrichment={"org": "NewCorp"}),
@@ -105,30 +100,6 @@ def test_single_valued_job_change_supersedes():
     assert new["valid_until"] is None, "new org must be currently valid"
     node = db.execute("SELECT org FROM persons WHERE id=?", (CID,))[0]
     assert node["org"] == "NewCorp", f"node should show current job, got {node['org']}"
-
-
-def test_uncorroborated_org_not_promoted_to_node():
-    """An employer nothing confirms is kept as a fact and kept off the record.
-
-    'Heriot-Watt University' entered the address book this way: plausible,
-    sourced from a crawl, and false. The graph is the right place for a
-    hypothesis; the contact record -- which syncs into the real address book --
-    is not.
-    """
-    path, db = _fresh_db()
-    db.execute_write("UPDATE persons SET email='someone@gmail.com' WHERE id=?", (CID,))
-
-    weave_enrich.store_scout_findings(
-        CID, _research(enrichment={"org": "Heriot-Watt University"}),
-        person_name="Test Person", db_path=path)
-
-    facts = _facts(db, "org")
-    assert len(facts) == 1, "the finding is still recorded, with its source"
-    assert facts[0]["value"] == "Heriot-Watt University"
-    assert facts[0]["valid_until"] is None, "and it is a current hypothesis"
-    node = db.execute("SELECT org FROM persons WHERE id=?", (CID,))[0]
-    assert not (node["org"] or ""), \
-        f"node must stay empty, got {node['org']!r}"
 
 
 def test_single_valued_same_value_no_duplicate():

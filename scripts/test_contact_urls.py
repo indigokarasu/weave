@@ -81,7 +81,7 @@ def test_generic_website():
 
 
 def test_credentials_host_normalized():
-    p, u = classify_url("https://user:pass@example.com/me")
+    p, u = classify_url("https://user:pass@example.com/me")  # secret-allow: synthetic fixture, reserved domain
     assert p == "website" and u == "https://example.com/me", u
 
 

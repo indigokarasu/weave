@@ -13,13 +13,13 @@ import time
 import urllib.parse
 import urllib.request
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 import google_sync as G  # noqa: E402
 from url_norm import canonical_url, dedupe_key  # noqa: E402
 
 API = "https://people.googleapis.com/v1"
 audit = sys.argv[1] if len(sys.argv) > 1 else sorted(
-    glob.glob("/root/.hermes/profiles/indigo/commons/data/ocas-weave/junk-urls-*.json"),
+    glob.glob(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave/junk-urls-*.json")),
     key=os.path.getmtime)[-1]
 d = json.load(open(audit))
 want = {g["resourceName"]: [u for u in g["removed"]] for g in d["google_removed"]}

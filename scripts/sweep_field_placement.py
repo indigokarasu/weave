@@ -36,12 +36,12 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 import google_sync as G  # noqa: E402
 
 API = "https://people.googleapis.com/v1"
 FIELDS = "names,userDefined,addresses,organizations,urls,metadata"
-AUDIT_DIR = "/root/.hermes/profiles/indigo/commons/data/ocas-weave"
+AUDIT_DIR = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave")
 
 US_STATES = {
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL",

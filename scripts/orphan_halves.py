@@ -16,17 +16,17 @@ import re
 import sqlite3
 import sys
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 from pair_junk import COMPANY_HINT
 
-con = sqlite3.connect("/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite")
+con = sqlite3.connect(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
 con.row_factory = sqlite3.Row
 
 # contacts whose org or title we cleared today
 touched = set()
-for f in glob.glob("/root/.hermes/profiles/indigo/commons/data/ocas-weave/job-junk-*.json") \
-        + glob.glob("/root/.hermes/profiles/indigo/commons/data/ocas-weave/org-junk-*.json") \
-        + glob.glob("/root/.hermes/profiles/indigo/commons/data/ocas-weave/pair-repair-*.json"):
+for f in glob.glob(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave/job-junk-*.json")) \
+        + glob.glob(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave/org-junk-*.json")) \
+        + glob.glob(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave/pair-repair-*.json")):
     try:
         d = json.load(open(f))
     except Exception:  # noqa: BLE001

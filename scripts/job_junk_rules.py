@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 """Precise detectors for scrape junk in org/occupation.
 
 My first pass used three crude rules and each had a large false-positive class:
@@ -25,7 +26,7 @@ import re
 import sqlite3
 import sys
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 from sweep_field_placement import _ROLE_WORDS
 
 ROLES = {w.lower() for w in _ROLE_WORDS} | {
@@ -93,7 +94,7 @@ def classify(value, contact_name, field):
 
 if __name__ == "__main__":
     con = sqlite3.connect(
-        "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite")
+        os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
     con.row_factory = sqlite3.Row
     rows = list(con.execute(
         "SELECT id pid, name, occupation v, 'occupation' f FROM persons "

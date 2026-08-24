@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 """Where is a person's NAME acting as their identifier?
 
 A name is not an identity: two people share one, one person changes theirs, and a
@@ -9,7 +10,7 @@ import collections
 import re
 import sqlite3
 
-DB = "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite"
+DB = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite")
 con = sqlite3.connect(DB)
 con.row_factory = sqlite3.Row
 

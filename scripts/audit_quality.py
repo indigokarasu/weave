@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 """Sweep the whole store for data-quality defects, many classes at once.
 
 Finding one defect class per enrichment round is slow. This checks every class
@@ -11,11 +12,11 @@ import re
 import sqlite3
 import sys
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 from url_norm import canonical_url, dedupe_key
 from url_quality import is_person_profile, handle_is_opaque
 
-DB = "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite"
+DB = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite")
 con = sqlite3.connect(DB)
 con.row_factory = sqlite3.Row
 names = [r[0] for r in con.execute(

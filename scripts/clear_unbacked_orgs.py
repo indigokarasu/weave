@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 """Employers on the visible record that nothing in the system ever claimed.
 
 This is deliberately NARROWER than "uncorroborated". Earlier in this cleanup I
@@ -30,16 +31,16 @@ exists in its own graph, or it gets cleared.
 import argparse, collections, glob, json, os, sqlite3, sys
 from datetime import datetime, timezone
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 from employer_gate import corroborate
 
-DB = "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite"
+DB = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite")
 ap = argparse.ArgumentParser(); ap.add_argument("--apply", action="store_true")
 a = ap.parse_args()
 
 con = sqlite3.connect(DB, timeout=60); con.row_factory = sqlite3.Row
 
-snap = json.load(open(sorted(glob.glob("/root/google-contacts-snapshot-*.json"))[0]))
+snap = json.load(open(sorted(glob.glob(os.path.join(os.path.expanduser("~"), "google-contacts-snapshot-*.json")))[0]))
 owner = {}
 for p in snap:
     o = (p.get("organizations") or [{}])[0]

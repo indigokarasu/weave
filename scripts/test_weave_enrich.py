@@ -280,7 +280,29 @@ def test_queries_dedupe_and_cap():
     qs = build_scout_queries("Test Person", org="Org", occupation="Occupation",
                              location_city="City")
     assert len(qs) == len(set(qs))
-    assert len(qs) <= 8
+    # Raised from 8 when the phone and email-domain anchors were added. Both are
+    # far more identifying than a name query, so they earn their slots rather
+    # than displacing the org/site tiers.
+    assert len(qs) <= 10
+
+
+def test_phone_is_searched_when_present():
+    """A phone number is the most identifying field a contact has."""
+    qs = build_scout_queries("Test Person", org="Org", phone="+14155551234")
+    assert any("555-1234" in q or "5551234" in q for q in qs), qs
+    # and it leads, because an exact number match beats any name match
+    assert "555" in qs[0], qs[0]
+
+
+def test_short_national_form_does_not_lead():
+    """A national form too short to be distinctive must not be the first query."""
+    qs = build_scout_queries("Test Person", phone="+4561770699")
+    assert qs and "+45" in qs[0], qs[0]
+
+
+def test_city_used_even_when_org_present():
+    qs = build_scout_queries("Test Person", org="Org", location_city="Oakland, CA")
+    assert any("Oakland" in q for q in qs), qs
 
 
 def test_queries_for_person_none_fields():

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 """Detect scrape junk in org/occupation, by structure rather than by vocabulary.
 
 Reading all 693 distinct occupations, the junk falls into four shapes. Each rule
@@ -27,7 +28,7 @@ import re
 import sqlite3
 import sys
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 from sweep_field_placement import _ROLE_WORDS
 
 ROLES = {w.lower() for w in _ROLE_WORDS} | {
@@ -116,7 +117,7 @@ def classify(value, contact_name, field, contact_names):
 
 if __name__ == "__main__":
     con = sqlite3.connect(
-        "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite")
+        os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
     con.row_factory = sqlite3.Row
     names = {r[0].strip().lower() for r in con.execute(
         "SELECT DISTINCT name FROM persons WHERE name IS NOT NULL AND name != ''")}

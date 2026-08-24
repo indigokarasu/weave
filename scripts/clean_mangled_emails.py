@@ -16,8 +16,8 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 
-DB = "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite"
-AUDIT_DIR = "/root/.hermes/profiles/indigo/commons/data/ocas-weave"
+DB = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite")
+AUDIT_DIR = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave")
 PROVIDERS = ["gmail.com", "yahoo.com", "hotmail.com", "me.com", "aol.com",
              "outlook.com", "icloud.com", "comcast.net", "sbcglobal.net",
              "mac.com", "msn.com", "live.com", "ymail.com", "googlemail.com",

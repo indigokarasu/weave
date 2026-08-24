@@ -20,11 +20,11 @@ import sys
 import urllib.request
 from datetime import datetime
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 import google_sync as G  # noqa: E402
 
 API = "https://people.googleapis.com/v1"
-AUDIT_DIR = "/root/.hermes/profiles/indigo/commons/data/ocas-weave"
+AUDIT_DIR = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave")
 DUP_RN = "people/c8720545342291933692"      # created by mistake
 KEEP_RN = "people/c2013140120704559373"     # the original
 WEAVE_KEEP = "4f606101"
@@ -35,7 +35,7 @@ ap.add_argument("--apply", action="store_true")
 a = ap.parse_args()
 
 # ---- 1. the check
-P = "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts/google_sync.py"
+P = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts/google_sync.py")
 s = open(P).read()
 old = '''    s = _ud.normalize("NFKD", s)
     s = "".join(c for c in s if not _ud.combining(c))
@@ -99,7 +99,7 @@ req = urllib.request.Request("%s/%s:deleteContact" % (API, DUP_RN), method="DELE
 with urllib.request.urlopen(req, timeout=30) as r:
     print("  duplicate deleted: HTTP %s" % r.status)
 
-con = sqlite3.connect("/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite",
+con = sqlite3.connect(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"),
                       timeout=60)
 con.row_factory = sqlite3.Row
 ids = {r["id"][:8]: r["id"] for r in con.execute(

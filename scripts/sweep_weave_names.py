@@ -24,8 +24,8 @@ import re
 import sqlite3
 from datetime import datetime
 
-DB = "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite"
-AUDIT_DIR = "/root/.hermes/profiles/indigo/commons/data/ocas-weave"
+DB = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite")
+AUDIT_DIR = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave")
 
 SUFFIX = re.compile(
     r"[,\s]+((?:Ph\.?\s?D\.?|M\.?D\.?|M\.?B\.?A\.?|J\.?D\.?|Esq\.?|Jr\.?|Sr\.?|"

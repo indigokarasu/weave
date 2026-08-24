@@ -1,3 +1,4 @@
+import os
 """Every org and occupation value, so the junk patterns are visible rather than guessed.
 
 Jared named five: "Contact Me Book Katie Allen to speak", "Trust Issues",
@@ -12,14 +13,14 @@ import re
 import sqlite3
 import sys
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 try:
     from google_sync import is_implausible_job_value
 except Exception as e:  # noqa: BLE001
     is_implausible_job_value = None
     print("  (could not import is_implausible_job_value: %s)" % e)
 
-con = sqlite3.connect("/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite")
+con = sqlite3.connect(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
 con.row_factory = sqlite3.Row
 
 NAMED = ["Contact Me Book Katie Allen to speak", "Trust Issues", "Heriot, Watt",

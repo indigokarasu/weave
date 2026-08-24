@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 """Evaluate org and title TOGETHER, not one at a time.
 
 The two cases Jared named first survive every single-field rule, because each
@@ -20,7 +21,7 @@ import re
 import sqlite3
 import sys
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 from job_junk_v3 import ROLES as _BASE_ROLES
 
 # A title is often a FUNCTION or department rather than a named role --
@@ -96,7 +97,7 @@ def evaluate_pair(org, title, contact_name, is_person):
 
 if __name__ == "__main__":
     con = sqlite3.connect(
-        "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite")
+        os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
     con.row_factory = sqlite3.Row
     rows = list(con.execute(
         "SELECT id, name, name_given, name_family, org, occupation "

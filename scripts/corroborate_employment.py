@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
+import os
 """Which enrichment-added employers are corroborated by anything?
 
 'Heriot-Watt University' was not junk-shaped -- it read as a fine employer and
 was simply false. No string rule catches that. What can be checked is whether
 anything ELSE about the contact agrees with it:
 
-    katie@pictalhealth.com -> 'Pictal Health'   the email domain says so
+    someone@examplehealth.test -> 'Pictal Health'   the email domain says so
     Ankita Akerkar         -> 'Google'          she has a developers.google.com
                                                 profile
     Kim Appelquist         -> 'Heriot-Watt'     nothing at all
@@ -24,13 +25,13 @@ import re
 import sqlite3
 import sys
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 from url_norm import canonical_url
 
-con = sqlite3.connect("/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite")
+con = sqlite3.connect(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
 con.row_factory = sqlite3.Row
 
-snap = json.load(open(sorted(glob.glob("/root/google-contacts-snapshot-*.json"))[0]))
+snap = json.load(open(sorted(glob.glob(os.path.join(os.path.expanduser("~"), "google-contacts-snapshot-*.json")))[0]))
 owner_org = {}
 for p in snap:
     o = (p.get("organizations") or [{}])[0]

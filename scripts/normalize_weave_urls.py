@@ -18,13 +18,13 @@ import sys
 import uuid
 from datetime import datetime, timezone
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 from url_norm import canonical_url, dedupe_key  # noqa: E402
 
-DB = "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite"
+DB = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite")
 # timestamped: a second run has nothing to retire, so a fixed name would
 # overwrite the first run' audit and lose the only record of what was retired
-AUDIT_DIR = "/root/.hermes/profiles/indigo/commons/data/ocas-weave"
+AUDIT_DIR = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave")
 SQL = ("SELECT f.id, f.predicate, f.value, e.source_id AS pid, f.record_time "
        "FROM facts f JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact' "
        "WHERE f.valid_until IS NULL AND ("

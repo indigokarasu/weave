@@ -18,14 +18,14 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 import google_sync as G  # noqa: E402
 from url_norm import dedupe_key  # noqa: E402
 from url_quality import is_person_profile  # noqa: E402
 
 API = "https://people.googleapis.com/v1"
-DB = "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite"
-AUDIT_DIR = "/root/.hermes/profiles/indigo/commons/data/ocas-weave"
+DB = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite")
+AUDIT_DIR = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave")
 INFERRED = ("scout_osint", "scout_research", "web_enrichment", "inferred", "llm", "search")
 
 ap = argparse.ArgumentParser()

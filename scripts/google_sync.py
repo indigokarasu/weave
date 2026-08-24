@@ -38,8 +38,23 @@ if set(sys.argv[1:]) & _HELP_ARGS:
 
 
 
+# When a caller wants the outbound log as data rather than on stdout (the
+# per-contact push runs hundreds of times inside the enrichment loop and would
+# bury its output), it installs a sink and prints the buffer only on failure.
+_LOG_SINK = None
+
+
 def _log(msg):
+    if _LOG_SINK is not None:
+        _LOG_SINK.append(msg)
+        return
     print(msg, flush=True)
+
+
+# A push scoped to named people is not a "what changed since last sync" pass:
+# the caller has just changed those people and wants everything weave holds for
+# them considered, so the time window is opened all the way.
+EPOCH_TS = "1970-01-01T00:00:00+00:00"
 
 
 def load_config():
@@ -63,18 +78,93 @@ def _validate_phone(phone):
     return cleaned
 
 
+# Fact provenances that mean "a person put this here", as opposed to a machine
+# inferring it. Only these protect a stored value from an owner edit made in
+# Google Contacts. Every other source_type present in the facts table for these
+# predicates -- web_enrichment, inferred, scout_*, linkedin_profile, research --
+# is inference, however confident the label sounds.
+OWNER_SOURCE_TYPES = ("google_contacts", "user_stated", "user-stated",
+                      "owner", "manual", "verified", "linkedin_import")
+
+
+def _owner_field_values(weave):
+    """{person_id: {field: {values...}}} for values a PERSON entered."""
+    out = {}
+    q = ",".join("?" * len(OWNER_SOURCE_TYPES))
+    rows = weave.execute(
+        "SELECT e.source_id AS pid, f.predicate, f.value FROM facts f "
+        "JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact' "
+        f"WHERE f.source_type IN ({q}) AND f.predicate IN "
+        "('org','occupation','location_city','location_country')",
+        tuple(OWNER_SOURCE_TYPES))
+    for r in rows:
+        out.setdefault(r["pid"], {}).setdefault(r["predicate"], set()).add(r["value"])
+    return out
+
+
+_OVR_TOKEN = _re.compile(r"[a-z0-9]+")
+
+
+def _same_thing(a, b):
+    """True when two values are the same thing written at different precision.
+
+    The two sides do not store these fields the same way, so "different string"
+    is not "different value". build_contact_body splits weave's single
+    location_city "San Francisco, CA" into google city="San Francisco" +
+    region="CA", and inbound reads city back on its own -- so a value weave
+    itself pushed returns looking changed. Measured on the live address book:
+    276 of the 281 location_city differences and 14 of the 23 occupation
+    differences are this, one value being a whole-token prefix or suffix of the
+    other ("Teacher (ECE)"/"Teacher", "VP at Youtube"/"VP", "Portland"/"Portland,
+    OR"). Replacing those would quietly delete the more specific half.
+
+    Whole tokens, not characters: a bare substring test makes "A" a prefix of
+    "Apple".
+    """
+    ta = _OVR_TOKEN.findall((a or "").lower())
+    tb = _OVR_TOKEN.findall((b or "").lower())
+    if not ta or not tb:
+        return False
+    if len(ta) > len(tb):
+        ta, tb = tb, ta
+    return tb[:len(ta)] == ta or tb[-len(ta):] == ta
+
+
 def _build_override_check(weave):
     """(person_id, field, incoming) -> 1 when the stored value may be replaced.
 
-    1 only when the value currently in weave is one ENRICHMENT put there and
-    Google is offering something different and non-empty. An owner-entered value
-    never appears in the inferred set, so it is never overwritten.
+    Google Contacts is the owner's own record, and outbound withholds inferred
+    values from it, so a non-empty value sitting in Google is owner data by
+    construction. It wins over what weave holds unless either
+      - weave's value is itself owner-entered, or
+      - the two are the same thing at different precision (_same_thing).
+
+    This began as the mirror image -- override only when weave's value matched
+    an INFERRED fact -- and that test never fired once. Measured 2026-08-23 on
+    the live address book: 13 contacts had weave.org != google.org and all 13
+    were held, because the check needs a fact whose VALUE equals the column and
+    10 of the 13 had no org fact at all (the value went straight into the persons
+    column, e.g. Sherah Beck org 'Elnetselskabet' on a web_enrichment row, Chase
+    Bank org 'Doctor'). Of the three that did have one, none carried a
+    source_type in the inferred tuple -- Peter Synak's came from
+    'linkedin_profile'. So the owner's own corrections -- 'Intiut', 'Meta',
+    'Camus Energy', 'Airlift (tm)' -- could not reach weave, which is the exact
+    failure the check existed to fix.
+
+    Asking the opposite question succeeds without a value match: the ABSENCE of
+    an owner-entered fact is provable, whereas enumerating every label inference
+    might carry is not.
+
+    Effect on the current data: 27 values change (13 org, 9 occupation, 5 city),
+    290 are held by _same_thing, and none of the 964 linked contacts loses a
+    value to an empty one.
     """
-    inferred = _inferred_field_values(weave)
+    owner = _owner_field_values(weave)
     cache = {}
 
     def _ovr(pid, field, incoming):
         inc = (incoming or "").strip()
+        # An empty or absent value from google never clears what weave holds.
         if not inc:
             return 0
         if pid not in cache:
@@ -85,7 +175,9 @@ def _build_override_check(weave):
         cur = ((cache[pid].get(field) or "")).strip()
         if not cur or cur == inc:
             return 0
-        return 1 if cur in (inferred.get(pid, {}).get(field) or ()) else 0
+        if _same_thing(cur, inc):
+            return 0
+        return 0 if cur in (owner.get(pid, {}).get(field) or ()) else 1
 
     return _ovr
 
@@ -178,18 +270,45 @@ def sync_inbound(token):
         rn = c.get("resourceName", "")
         name_data = (c.get("names") or [{}])[0] if c.get("names") else {}
         name = name_data.get("displayName", "")
+        org_only = False
         if not name:
-            skipped += 1
-            continue
+            # An org-only contact -- a shop, a bank, a clinic -- carries no
+            # displayName at all. Skipping it left 20 real Google contacts with
+            # no weave row (16 of them with none by any key), so nothing about
+            # them could sync in either direction.  The organization name is the
+            # contact's actual identity, so it becomes the weave display name.
+            #
+            # name_given / name_family are deliberately left EMPTY.
+            # build_contact_body emits a `names` block only when one of them is
+            # set, so a company name imported this way can never be written back
+            # into Google's given/family fields -- which is also what lets
+            # company names be moved OUT of name fields without weave putting
+            # them straight back.
+            name = ((c.get("organizations") or [{}])[0].get("name", "")
+                    if c.get("organizations") else "") or ""
+            name = name.strip()
+            if not name:
+                skipped += 1
+                continue
+            org_only = True
 
-        given = name_data.get("givenName", "")
-        family = name_data.get("familyName", "")
+        given = "" if org_only else name_data.get("givenName", "")
+        family = "" if org_only else name_data.get("familyName", "")
         email = (c.get("emailAddresses") or [{}])[0].get("value", "") if c.get("emailAddresses") else ""
         phone = _validate_phone((c.get("phoneNumbers") or [{}])[0].get("value", "")) if c.get("phoneNumbers") else ""
         org = (c.get("organizations") or [{}])[0].get("name", "") if c.get("organizations") else ""
         title_val = (c.get("organizations") or [{}])[0].get("title", "") if c.get("organizations") else ""
-        city = (c.get("addresses") or [{}])[0].get("city", "") if c.get("addresses") else ""
-        country = (c.get("addresses") or [{}])[0].get("countryCode", "") if c.get("addresses") else ""
+        # Compose city + region the same way build_contact_body SPLITS them on
+        # the way out ("San Francisco, CA" -> city + region). Reading back only
+        # `city` made every value weave itself pushed look changed: 276 of the
+        # 281 location_city differences on 2026-08-23 were this one asymmetry,
+        # and where an override did fire it silently dropped the state --
+        # 'Piedmont, CA' arrived as 'Piedmont'.
+        _addr0 = (c.get("addresses") or [{}])[0] if c.get("addresses") else {}
+        _city_part = (_addr0.get("city") or "").strip()
+        _region_part = (_addr0.get("region") or "").strip()
+        city = f"{_city_part}, {_region_part}" if (_city_part and _region_part) else _city_part
+        country = (_addr0.get("countryCode") or "")
 
         # Match: resource_name → email → phone → new
         pid = rn_map.get(rn) or (email_map.get(email.lower()) if email else None) or (phone_map.get(phone) if phone else None)
@@ -281,7 +400,12 @@ def sync_inbound(token):
     extra_stats = {}
     try:
         from contact_extras import import_all as _import_extras
-        extra_stats, _f, _e, _sk = _import_extras(contacts, SQLITE_DB)
+        # import_all returns (stats, facts, edges, skipped, creates). Unpacking
+        # four raised ValueError on EVERY run; the except below swallowed it, so
+        # birthdays, relations, events and userDefined have silently never been
+        # imported -- "Inbound extras: import failed (ValueError: too many values
+        # to unpack (expected 4))" on 2026-08-23.
+        extra_stats, _f, _e, _sk, _cr = _import_extras(contacts, SQLITE_DB)
         _log(f"  Inbound extras: +{extra_stats.get('facts', 0)} fact(s) "
              f"{extra_stats.get('by_predicate', {})}, "
              f"+{extra_stats.get('edges', 0)} relation edge(s), "
@@ -617,12 +741,69 @@ def _extra_field_maps(weave, last_sync_at):
 
     return birthdays, relations, userdef
 
-def sync_outbound(token, last_sync_at):
-    """Push Weave changes TO Google Contacts via REST API + SQLite backend."""
+# Relation labels that carry no information the specific one does not. The
+# pipeline derives these from its own edge types (SpouseOf -> "spouse",
+# ParentOf -> "child"), so pushing one back alongside the label the owner typed
+# duplicates the relationship: "Peter Arcuni: Husband" plus "Peter Arcuni:
+# spouse", "Sonny: Son" plus "Sonny: child". One person, one relation.
+_GENERIC_RELATION = {"spouse", "partner", "domesticpartner", "child", "parent",
+                     "sibling", "relative", "friend", "family"}
+
+
+_REL_DATE = _re.compile(r"[\s,]+\d{1,2}/\d{1,2}/\d{2,4}\s*$")
+
+
+def _relation_person_key(e):
+    """Relations dedupe on the PERSON, not on (person, label).
+
+    The name is normalised first. Google's relation field is free text, so the
+    same person is written several ways -- most often with their birthday typed
+    onto the end ('Isadora "Izzy" Arcuni 07/31/215'), which is how one child
+    ended up listed twice: once as the owner typed her, once under the cleaned
+    name this pipeline derived when it created her contact.
+    """
+    v = str(e.get("person") or "").strip()
+    v = _REL_DATE.sub("", v)
+    v = _re.sub(r"[\"\u201c\u201d\u2018\u2019()]", " ", v)
+    return _re.sub(r"\s+", " ", v).strip().lower()
+
+
+def _relation_is_generic(e):
+    import re as _r
+    return _r.sub(r"[^a-z]", "", str(e.get("type") or "").lower()) in _GENERIC_RELATION
+
+
+def sync_outbound(token, last_sync_at, only_person_ids=None):
+    """Push Weave changes TO Google Contacts via REST API + SQLite backend.
+
+    only_person_ids scopes the whole pass to those weave person ids. That is the
+    per-contact mode the enrichment loop uses: a full pass re-reads every contact
+    in the address book (~10 connections.list pages inbound, a 1000-per-page
+    dedupe index, and an etag batchGet for every changed row), which at one pass
+    per 30 enriched contacts is what earned the 429s. Scoped, the cost is one
+    batchGet and one batchUpdate for the single contact that just changed.
+
+    Scoping changes only WHICH rows are considered. Every content gate is the
+    same code on the same path: GATED_FIELDS / _inferred_field_values withholding,
+    url_quality.is_person_profile, the blocked-host list, url_norm canonicalisation
+    and dedupe, is_implausible_job_value, fill-only names/birthdays, list merges
+    against Google's current values, the updateMask-equals-body-keys rule and the
+    outbound checkpoint.
+    """
     sys.path.insert(0, str(Path(__file__).parent))
     from weave_sqlite import WeaveDB
 
     weave = WeaveDB(SQLITE_DB)
+
+    scoped = [str(p) for p in (only_person_ids or []) if p] or None
+    _scope_clause, _scope_params = "", {}
+    if scoped:
+        last_sync_at = EPOCH_TS
+        _ph = ",".join(":sp%d" % i for i in range(len(scoped)))
+        _scope_clause = "\n          AND p.id IN (%s)\n" % _ph
+        _scope_params = {"sp%d" % i: v for i, v in enumerate(scoped)}
+        _log("  Outbound: scoped to %d person id(s); inbound and creates skipped"
+             % len(scoped))
 
     ckpt_path = AGENT_ROOT / "commons/db/ocas-weave/staging/outbound_ckpt.txt"
     pushed_set = set()
@@ -666,7 +847,7 @@ def sync_outbound(token, last_sync_at):
           AND (f.predicate LIKE 'profile_%' OR f.predicate IN
                ('linkedin', 'linkedin_url', 'website'))
           AND f.value LIKE '%.%'
-    """, {"ts": last_sync_at})
+    """ + _scope_clause, dict({"ts": last_sync_at}, **_scope_params))
     # Owner data only -- the same rule GATED_FIELDS applies to org/occupation/
     # location. Without this, every URL scout guessed was pushed into the real
     # address book and re-imported next run as a 'google_contacts' fact, which
@@ -755,13 +936,54 @@ def sync_outbound(token, last_sync_at):
 
 
     # Find records modified since last sync
-    rows = weave.execute("""
-        SELECT google_resource_name, name_given, name_family,
-               email, phone, org, occupation, location_city, location_country, id
-        FROM persons
-        WHERE record_time > :ts
-          AND (source_type IS NULL OR source_type <> 'imported')
-    """, {"ts": last_sync_at})
+    if scoped:
+        # Named people are pushed on the caller's say-so, so neither filter of the
+        # bulk query applies. record_time is irrelevant (enrichment writes FACTS;
+        # it touches the persons row for about 6% of writes), and source_type
+        # 'imported' is excluded from the bulk pass only to stop it echoing the
+        # whole address book back at Google. Keeping that filter here would make
+        # the per-contact push silently do nothing for the 403 rows marked
+        # 'imported' -- 199 of the 332 contacts that gained a profile url in the
+        # last 24h -- which is exactly the case this change exists to fix.
+        _ph2 = ",".join(":sq%d" % i for i in range(len(scoped)))
+        rows = weave.execute(
+            "SELECT google_resource_name, name_given, name_family, email, phone, "
+            "org, occupation, location_city, location_country, id FROM persons "
+            "WHERE id IN (%s)" % _ph2,
+            {"sq%d" % i: v for i, v in enumerate(scoped)})
+    else:
+        rows = weave.execute("""
+            SELECT p.google_resource_name AS google_resource_name,
+                   p.name_given AS name_given, p.name_family AS name_family,
+                   p.email AS email, p.phone AS phone, p.org AS org,
+                   p.occupation AS occupation,
+                   p.location_city AS location_city,
+                   p.location_country AS location_country, p.id AS id
+            FROM persons p
+            -- Select on the FACT's timestamp as well as the person row's, and
+            -- do NOT exclude source_type 'imported'.
+            --
+            -- Enrichment writes FACTS and touches the persons row for about 6%
+            -- of writes, so p.record_time alone misses graph-only changes --
+            -- the same defect already fixed on the linkedin_rows query above.
+            -- The source_type filter was the larger half of the bug: measured
+            -- 2026-08-23, 247 of the 457 linked contacts that gained a
+            -- profile/website fact in the previous 24h sit on rows labelled
+            -- 'imported' (395 of 964 linked rows carry that label, because it
+            -- is what inbound stamps on every contact Google itself created).
+            -- Excluding them meant their new urls could never reach Google by
+            -- the bulk path. Keeping the address book from being echoed back is
+            -- the job of the time window and the content gates, not of a
+            -- provenance label that covers 41% of the address book.
+            WHERE p.record_time > :ts
+               OR EXISTS (SELECT 1
+                            FROM edges e
+                            JOIN facts f ON f.id = e.target_id
+                           WHERE e.source_id = p.id
+                             AND e.rel_type = 'HasFact'
+                             AND f.valid_until IS NULL
+                             AND f.record_time > :ts)
+        """, {"ts": last_sync_at})
 
     to_update = [r for r in rows if r["google_resource_name"]]
     # NEVER create Google contacts. Weave holds person rows that are not
@@ -776,7 +998,10 @@ def sync_outbound(token, last_sync_at):
     #   is_pseudo   - relations and BOOK entries are never their own contact
     #   is_archived - deliberately retired
     #   is_deceased - never recreate a contact the owner removed
-    create_rows = weave.execute("""
+    # Creating contacts is a whole-address-book decision (it needs the live
+    # name/email index to avoid duplicates, which is a full connections.list
+    # read). A scoped push never creates; the periodic full sync still does.
+    create_rows = [] if scoped else weave.execute("""
         SELECT google_resource_name, name_given, name_family,
                email, phone, org, occupation, location_city, location_country,
                id, name
@@ -792,7 +1017,7 @@ def sync_outbound(token, last_sync_at):
     # the user's real address book is much worse than a skipped create.
     inferred_map = _inferred_field_values(weave)
     gated_total = 0
-    g_names, g_emails = _google_name_email_index(token)
+    g_names, g_emails = (None, None) if scoped else _google_name_email_index(token)
     to_create, dup_skipped = [], 0
     if g_names is None:
         create_rows = []   # no index -> create nothing rather than risk duplicates
@@ -824,7 +1049,9 @@ def sync_outbound(token, last_sync_at):
          f"value(s) known; these are withheld from the push")
 
     if not to_update and not to_create:
-        return {"outbound_pushed": 0, "outbound_failed": 0, "outbound_skipped": 0, "outbound_stale": 0, "outbound_rate_limited": 0, "outbound_created": 0}
+        return {"outbound_pushed": 0, "outbound_failed": 0, "outbound_skipped": 0,
+                "outbound_stale": 0, "outbound_deferred": 0,
+                "outbound_rate_limited": 0, "outbound_created": 0}
 
     all_updates = []
     all_creates = []
@@ -840,11 +1067,22 @@ def sync_outbound(token, last_sync_at):
     def build_contact_body(rn, given, family, email, phone, org, title, city, country, pid):
         phone_clean = _validate_phone(phone)
         body = {}
-        if given or family:
+        _prev_person = existing_lookup(rn) or {}
+        # A contact google holds with an organization and NO name at all is an
+        # organisation entry -- a bank, a clinic, a shop. Weave now gives those
+        # rows a display name taken from that organization, and pushing it back
+        # as a givenName turns the entry into a person: the bulk pass wrote
+        # givenName 'Venmo', 'Wealthfront', 'Chase Bank' and 'Visualping' into
+        # four of them on 2026-08-23. Weave's inbound keeps name_given empty for
+        # exactly this reason; this is the matching guard on the way out, for
+        # rows that got their name parts some other way.
+        _org_only = bool(_prev_person) and not (_prev_person.get("names") or []) \
+            and bool(_prev_person.get("organizations") or [])
+        if (given or family) and not _org_only:
             # Replacing the Name object deletes middleName, honorifics and every
             # phonetic subfield. Carry the existing Name through and set only the
             # two parts weave actually knows.
-            _prev_names = ((existing_lookup(rn) or {}).get("names") or [])
+            _prev_names = (_prev_person.get("names") or [])
             _base = dict(_prev_names[0]) if _prev_names else {}
             _base.pop("metadata", None)
             _base.pop("displayName", None)
@@ -900,7 +1138,11 @@ def sync_outbound(token, last_sync_at):
                     address["city"] = city
             if country and "countryCode" not in address:
                 address["countryCode"] = country
-            body["addresses"] = [address]
+            # Second guard, at the source: a country with no place attached is not
+            # an address. Emitting it put `addresses` in the update mask carrying
+            # nothing but a countryCode.
+            if address.get("city") or address.get("streetAddress") or address.get("postalCode"):
+                body["addresses"] = [address]
         _bd = _bday_map.get(rn) or _bday_map.get(pid)
         if _bd:
             body["birthdays"] = [_bd]
@@ -916,6 +1158,49 @@ def sync_outbound(token, last_sync_at):
             # contact's own entries are preserved and only new ones append
             body["urls"] = list(_urls)
         return body
+
+    # Prefetch google's current copy of every contact about to be updated.
+    #
+    # This ran AFTER the body-building loops. build_contact_body calls
+    # existing_lookup(), existing_lookup reads existing_map, and existing_map was
+    # still unbound at that point -- so the UnboundLocalError guard fired on every
+    # single call and every body was built against {}. The "carry the existing
+    # Name through, fill-only" protection it documents therefore never once ran:
+    # body["names"] was always rebuilt from weave's two columns alone, and since
+    # `names` is in the update mask google REPLACED the whole Name object.
+    # Measured on the live account 2026-08-23, one bulk pass: 'Laith Ulaby, Ph.D.'
+    # and 'Rachel Neurath, PhD' lost honorificSuffix, and 'Kieu Anh Vuong, PhD'
+    # lost both the suffix and the givenName 'Kieu Anh' (weave held 'Kieu').
+    #
+    # Fetching first costs nothing extra -- the same batchGet, keyed off to_update
+    # instead of all_updates -- and makes every merge in build_contact_body real.
+    _log(f"  Outbound: fetching etags for {len(to_update)} contacts...")
+    rn_list = [r["google_resource_name"] for r in to_update
+               if r["google_resource_name"]]
+    etag_map = {}
+    existing_map = {}
+    for i in range(0, len(rn_list), 50):
+        batch_rns = rn_list[i:i+50]
+        rn_param = "&resourceNames=".join(urllib.parse.quote(rn) for rn in batch_rns)
+        url = (f"{PEOPLE_API_BASE}/people:batchGet?resourceNames={rn_param}"
+                   "&personFields=metadata,emailAddresses,phoneNumbers,addresses,organizations,"
+                   "names,urls,birthdays,relations,userDefined"
+                   "&sources=READ_SOURCE_TYPE_CONTACT")
+        try:
+            resp = _api_get(url, token, timeout=30)
+            for person in resp.get("responses", []):
+                p = person.get("person", {})
+                rn_val = p.get("resourceName", "")
+                etag = p.get("etag", "")
+                if rn_val and etag:
+                    etag_map[rn_val] = etag
+                    # keep the current multi-valued fields so the update merges
+                    # into them rather than replacing them
+                    existing_map[rn_val] = p
+        except Exception as e:
+            _log(f"    Etag batch error at {i}: {e}")
+        time.sleep(0.3)
+    _log(f"  Outbound: fetched {len(etag_map)}/{len(rn_list)} etags")
 
     for r in to_update:
         # Withhold enrichment-derived values from the push (owner data only).
@@ -964,36 +1249,15 @@ def sync_outbound(token, last_sync_at):
 
     _log(f"  Outbound: {len(all_updates)} contacts with data to push, {skipped} skipped")
 
-    # Batch etag fetching (50 per request)
-    _log(f"  Outbound: fetching etags for {len(all_updates)} contacts...")
-    rn_list = [rn for rn, *_ in all_updates]
-    etag_map = {}
-    existing_map = {}
-    for i in range(0, len(rn_list), 50):
-        batch_rns = rn_list[i:i+50]
-        rn_param = "&resourceNames=".join(urllib.parse.quote(rn) for rn in batch_rns)
-        url = (f"{PEOPLE_API_BASE}/people:batchGet?resourceNames={rn_param}"
-                   "&personFields=metadata,emailAddresses,phoneNumbers,addresses,organizations,"
-                   "names,urls,birthdays,relations,userDefined"
-                   "&sources=READ_SOURCE_TYPE_CONTACT")
-        try:
-            resp = _api_get(url, token, timeout=30)
-            for person in resp.get("responses", []):
-                p = person.get("person", {})
-                rn_val = p.get("resourceName", "")
-                etag = p.get("etag", "")
-                if rn_val and etag:
-                    etag_map[rn_val] = etag
-                    # keep the current multi-valued fields so the update merges
-                    # into them rather than replacing them
-                    existing_map[rn_val] = p
-        except Exception as e:
-            _log(f"    Etag batch error at {i}: {e}")
-        time.sleep(0.3)
-    _log(f"  Outbound: fetched {len(etag_map)}/{len(rn_list)} etags")
 
     # Batch update (200 per request)
     pushed = failed = stale = rate_limited = 0
+    # A contact whose etag moved under us is dropped from the batch and retried
+    # next run. That is correct, but it was invisible: it lands in no counter, so
+    # the run returned pushed=0 failed=0 and read as a clean no-op, and
+    # push_person -- which prints its captured log only when a counter is
+    # non-zero -- stayed silent about a push that did not happen.
+    deferred = 0
     batch_url = f"{PEOPLE_API_BASE}/people:batchUpdateContacts"
     # 'biographies' removed: it is never set, and a masked field absent from the
     # body is CLEARED, which wiped every contact's notes. 'urls' added, now that the
@@ -1050,9 +1314,32 @@ def sync_outbound(token, last_sync_at):
                 # build_contact_body never sets formattedValue, so keying on it
                 # made every address comparison compare "" and the merge silently
                 # echoed google's existing address back, discarding the new one.
-                return "|".join(str(a.get(k) or "").strip().lower()
-                                for k in ("city", "region", "countryCode", "country",
-                                          "streetAddress", "postalCode"))
+                #
+                # Keying on every part instead appended a duplicate whenever the
+                # same place was SPELLED differently on the two sides. weave holds
+                # one string, "San Francisco, CA", and build_contact_body puts the
+                # second token in `region`; google's stored copy of the same place
+                # may carry it in `country`, or add countryCode:"US", or both.
+                # Measured on the live address book: 21 contacts already carry a
+                # duplicate address and one carries 38 identical copies of
+                # "Portland, OR" -- one per sync pass. So a city-only address is
+                # keyed on its city, which is all that identifies it.
+                street = str(a.get("streetAddress") or "").strip().lower()
+                postal = str(a.get("postalCode") or "").strip().lower()
+                city = str(a.get("city") or "").strip().lower()
+                if street or postal:
+                    return "|".join((street, postal, city))
+                # No street, no postal code and no city: there is no PLACE here,
+                # only a bare countryCode. Return the empty string so the caller's
+                # `_v.strip("|")` test is falsy and the entry is never appended.
+                #
+                # This used to return "city|" and claim the caller dropped it, but
+                # "city|".strip("|") == "city", which is truthy -- so every
+                # place-less address was appended after all. That is exactly where
+                # google's orphan {"countryCode": "US"} entries come from: 14 were
+                # already in the address book, and one bulk pass on 2026-08-23 added
+                # 3 more (Munaf Assaf, Steve Arnold, Abhijit Oak).
+                return "city|" + city if city else ""
             for _f, _keyfn in (("emailAddresses", lambda e: str(e.get("value") or "").strip().lower()),
                                ("phoneNumbers",  lambda e: str(e.get("value") or "").strip().lower()),
                                ("addresses",     _addr_key),
@@ -1060,19 +1347,63 @@ def sync_outbound(token, last_sync_at):
                                # duplicate whenever weave lacked the title google had
                                ("organizations", lambda e: str(e.get("name") or "").strip().lower()),
                                ("urls", lambda e: _ukey(e.get("value")) or ""),
-                               ("relations", lambda e: (str(e.get("person") or "").strip().lower()
-                                                        + "|" + str(e.get("type") or "").strip().lower())),
+                               # keyed on the PERSON alone: a relationship to one
+                               # person must appear once, whatever it is labelled
+                               ("relations", _relation_person_key),
                                ("userDefined", lambda e: str(e.get("key") or "").strip().lower())):
                 if _f not in body:
                     continue
                 # metadata is output-only; do not echo google's source ids back
-                _have = [{k: v for k, v in dict(h).items() if k != "metadata"}
-                         for h in (_prev.get(_f) or [])]
+                _have_raw = [{k: v for k, v in dict(h).items() if k != "metadata"}
+                             for h in (_prev.get(_f) or [])]
+                # Also collapse what is ALREADY there. This block used to check
+                # only whether a NEW entry duplicated an existing one, and passed
+                # google's current list through untouched -- so once duplicates
+                # existed they were immortal. One contact accumulated 39 identical
+                # 'Princeton, NJ' addresses that every pass faithfully preserved,
+                # burying the real street address the owner had typed.
+                #
+                # A contact must never hold two entries with the same value, in
+                # any field, whether or not the field permits multiple values.
+                # The FIRST occurrence wins: google's own ordering puts the
+                # primary entry first, and later copies are the accumulated noise.
+                _have, _seen_h = [], {}
+                for _h in _have_raw:
+                    _hk = _keyfn(_h)
+                    if not _hk:
+                        _have.append(_h)
+                        continue
+                    if _hk in _seen_h:
+                        # Same key twice. For relations the owner's specific
+                        # label ("Husband", "Son") must win over the generic one
+                        # this pipeline derives ("spouse", "child").
+                        if _f == "relations" and _relation_is_generic(_have[_seen_h[_hk]]) \
+                                and not _relation_is_generic(_h):
+                            _have[_seen_h[_hk]] = _h
+                        continue
+                    _seen_h[_hk] = len(_have)
+                    _have.append(_h)
                 _add = []
                 for _entry in body[_f]:
                     _v = _keyfn(_entry)
-                    if _v.strip("|") and not any(_keyfn(h) == _v for h in _have):
-                        _add.append(_entry)
+                    if not _v.strip("|"):
+                        continue
+                    if any(_keyfn(h) == _v for h in _have):
+                        continue
+                    # weave stores a CITY; google may already hold the full street
+                    # address for that same city. Pushing the city as its own
+                    # entry adds a less precise copy of a place already recorded,
+                    # which is how one contact accumulated 39 'Princeton, NJ'
+                    # rows around the street address the owner had typed. If an
+                    # existing address already describes that city, the city-only
+                    # entry adds nothing.
+                    if _f == "addresses" and not (_entry.get("streetAddress") or "").strip() \
+                            and not (_entry.get("postalCode") or "").strip():
+                        _c = str(_entry.get("city") or "").strip().lower()
+                        if _c and any(str(h.get("city") or "").strip().lower() == _c
+                                      for h in _have):
+                            continue
+                    _add.append(_entry)
                 body[_f] = _have + _add
             if "urls" in body:
                 _seen_u, _norm_u = set(), []
@@ -1174,16 +1505,38 @@ def sync_outbound(token, last_sync_at):
                     # case of the owner editing a contact mid-run.
                     if "failedprecondition" in err.lower() or "etag" in err.lower():
                         if attempt < 3:
-                            _log(f"  Batch {batch_num}: refreshing etags and retrying")
+                            # A stale etag means the contact CHANGED since this
+                            # run read it -- the owner edited it, or another
+                            # writer did. The bodies in contacts_map are the
+                            # pre-change snapshot, so pairing them with a fresh
+                            # etag would overwrite whatever changed. That is not
+                            # a retry, it is a silent revert: it undid six
+                            # phone-number corrections made by a concurrent
+                            # process, and it would just as happily undo Jared's
+                            # own edit. Google's guidance is to re-read the
+                            # person and merge INTO the latest version.
+                            #
+                            # Until this path can merge properly, a contact whose
+                            # etag moved is DEFERRED, not forced. The next sync
+                            # rebuilds its body from current data and sends it
+                            # correctly. Losing one cycle is cheap; reverting an
+                            # edit the owner just made is not.
+                            _log(f"  Batch {batch_num}: etag(s) stale — re-reading")
                             _fresh = _refresh_etags(list(contacts_map.keys()), token)
-                            _dropped = 0
+                            _deferred = []
                             for _rn in list(contacts_map.keys()):
-                                if _fresh.get(_rn):
-                                    contacts_map[_rn]["etag"] = _fresh[_rn]
-                                else:
-                                    contacts_map.pop(_rn, None); _dropped += 1
-                            if _dropped:
-                                _log(f"    dropped {_dropped} contact(s) with no fresh etag")
+                                _cur = _fresh.get(_rn)
+                                if not _cur:
+                                    contacts_map.pop(_rn, None)
+                                    _deferred.append(_rn)
+                                elif _cur != contacts_map[_rn].get("etag"):
+                                    # it really did change underneath us
+                                    contacts_map.pop(_rn, None)
+                                    _deferred.append(_rn)
+                            if _deferred:
+                                deferred += len(_deferred)
+                                _log(f"    deferred {len(_deferred)} contact(s) changed "
+                                     f"since this run read them; next sync will resend")
                             if contacts_map:
                                 req_body["contacts"] = contacts_map
                                 continue
@@ -1229,13 +1582,53 @@ def sync_outbound(token, last_sync_at):
         "outbound_failed": failed,
         "outbound_skipped": skipped,
         "outbound_stale": stale,
+        "outbound_deferred": deferred,
         "outbound_rate_limited": rate_limited,
         "outbound_created": created_count,
         "outbound_create_failed": create_failed,
     }
 
 
+def push_person(person_id, token=None):
+    """Push exactly one weave person to Google. Two API calls, no inbound pass.
+
+    Returns the sync_outbound result dict with the captured log under "log".
+    The log is echoed to stdout only when something failed, so a caller in a loop
+    gets one quiet call per contact and full detail when it matters.
+    """
+    global _LOG_SINK
+    if token is None:
+        token = get_access_token()
+    _LOG_SINK = []
+    try:
+        res = sync_outbound(token, EPOCH_TS, only_person_ids=[person_id])
+    finally:
+        buf, _LOG_SINK = (_LOG_SINK or []), None
+    if (res.get("outbound_failed") or res.get("outbound_stale")
+            or res.get("outbound_deferred") or res.get("outbound_rate_limited")):
+        for line in buf:
+            print(line, flush=True)
+    res["log"] = buf
+    return res
+
+
 def main():
+    _argv = sys.argv[1:]
+    if "--push-person" in _argv:
+        # Targeted outbound for one weave person id. No inbound, no creates, and
+        # last_sync is deliberately NOT advanced -- this pass did not read Google,
+        # so it must not claim to have.
+        _i = _argv.index("--push-person")
+        if _i + 1 >= len(_argv):
+            print("usage: google_sync.py --push-person <weave_person_id>")
+            sys.exit(2)
+        _pid = _argv[_i + 1]
+        _tok = get_access_token()
+        _log("Targeted outbound push for person %s" % _pid)
+        _res = sync_outbound(_tok, EPOCH_TS, only_person_ids=[_pid])
+        _log("  Push result: %s" % _res)
+        return {"outbound": _res}
+
     config = load_config()
     last_sync = config.get("last_sync", {}).get("google_contacts")
     token = get_access_token()

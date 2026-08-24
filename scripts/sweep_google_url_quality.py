@@ -20,25 +20,25 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 import google_sync as G  # noqa: E402
 import sqlite3  # noqa: E402
 from url_norm import dedupe_key  # noqa: E402
 from url_quality import is_person_profile  # noqa: E402
 
 API = "https://people.googleapis.com/v1"
-AUDIT_DIR = "/root/.hermes/profiles/indigo/commons/data/ocas-weave"
+AUDIT_DIR = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave")
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--apply", action="store_true")
 a = ap.parse_args()
 
-con = sqlite3.connect("/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite")
+con = sqlite3.connect(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
 con.row_factory = sqlite3.Row
 names = [r["name"] for r in con.execute(
     "SELECT DISTINCT name FROM persons WHERE name IS NOT NULL AND name != ''")]
 
-snap_file = sorted(glob.glob("/root/google-contacts-snapshot-*.json"))[0]
+snap_file = sorted(glob.glob(os.path.join(os.path.expanduser("~"), "google-contacts-snapshot-*.json")))[0]
 snap = json.load(open(snap_file))
 protected = {}
 for p in snap:

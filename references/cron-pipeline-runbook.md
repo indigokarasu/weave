@@ -90,7 +90,7 @@ Skip rules:
 - Skip contacts where both `occupation` AND `org` are null AND confidence < 0.5
 - Skip unresolvable contacts (common name, no disambiguator)
 - Skip non-person entries (businesses: OpenTable, PayPal, Venmo, Google-as-entity, DJI, etc.)
-- Log every skip (unresolvable + non-person + insufficient-data) to the canonical `decisions.jsonl` at `~/.hermes/profiles/indigo/skills/ocas-weave/decisions.jsonl` using the format in `references/unresolvable-contacts.md`. This path is authoritative — do not write decisions to a different location or they won't be picked up by downstream audits.
+- Log every skip (unresolvable + non-person + insufficient-data) to the canonical `decisions.jsonl` at `$HERMES_HOME/../indigo/skills/ocas-weave/decisions.jsonl` using the format in `references/unresolvable-contacts.md`. This path is authoritative — do not write decisions to a different location or they won't be picked up by downstream audits.
 
 ### Step 5: Periodic Google Sync
 After every 10 enriched contacts, run google_sync.py again.

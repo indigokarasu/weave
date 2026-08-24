@@ -1,6 +1,7 @@
+import os
 """Cases from this session's real data, both directions."""
 import sys
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 from employer_gate import corroborate, is_free_mail, tokens, candidates
 
 SUPPORTED = [

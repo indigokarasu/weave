@@ -24,10 +24,10 @@ import os
 import sqlite3
 from datetime import datetime
 
-SCRIPT = ("/root/.hermes/profiles/indigo/skills/ocas-weave/scripts/"
+SCRIPT = (f"{_PROF}/skills/ocas-weave/scripts/"
           "recalculate_enrichability.py")
-DB = "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite"
-AUDIT_DIR = "/root/.hermes/profiles/indigo/commons/data/ocas-weave"
+DB = f"{_PROF}/commons/db/ocas-weave/weave.sqlite"
+AUDIT_DIR = f"{_PROF}/commons/data/ocas-weave"
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--apply", action="store_true")
@@ -113,3 +113,6 @@ print("VERIFY live facts unchanged        : %d" % con.execute(
     "SELECT COUNT(*) FROM facts WHERE valid_until IS NULL").fetchone()[0])
 print("VERIFY edges total                 : %d" % con.execute(
     "SELECT COUNT(*) FROM edges").fetchone()[0])
+import os
+_PROF = os.environ.get("HERMES_HOME",
+                       os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo"))

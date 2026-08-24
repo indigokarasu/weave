@@ -27,7 +27,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-scout/scripts")
+sys.path.insert(0, f"{_PROF}/skills/ocas-scout/scripts")
 from _normalize import fold_accents  # noqa: E402
 
 FACT_SOURCE_TYPE = "google_contacts"
@@ -130,7 +130,7 @@ def split_trailing_date(s):
 
 
 def clean_related_name(raw):
-    """'Richard Ngo <richardngo@google.com>' -> ('Richard Ngo', 'richardngo@google.com')."""
+    """'Avery Placeholder <someone@example.com>' -> ('Avery Placeholder', 'someone@example.com')."""
     s = (raw or "").strip()
     if not s:
         return None, None
@@ -358,7 +358,7 @@ if __name__ == "__main__":
     import urllib.request
 
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--db", default="/root/.hermes/profiles/indigo/commons/db/"
+    ap.add_argument("--db", default=f"{_PROF}/commons/db/"
                                     "ocas-weave/weave.sqlite")
     ap.add_argument("--apply", action="store_true")
     a = ap.parse_args()
@@ -400,3 +400,6 @@ if __name__ == "__main__":
     print("  pseudo contacts created: %d" % len(creates))
     for _c in creates[:12]:
         print("     %-34s birthday=%s" % (_c[1][:34], _c[2]))
+import os
+_PROF = os.environ.get("HERMES_HOME",
+                       os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo"))

@@ -6,7 +6,7 @@ The host has a split Python environment:
 
 | Python | Path | Has `kuzu` | Has `real_ladybug` | Has `ladybug` | DB v41 support |
 |---|---|---|---|---|---|
-| venv 3.11 (default `python3`) | `/usr/local/lib/hermes-agent/venv/bin/python3` | ✅ | ✅ (v40 only) | ❌ | ❌ |
+| venv 3.11 (default `python3`) | `$HERMES_PY` | ✅ | ✅ (v40 only) | ❌ | ❌ |
 | system 3.13 (`/usr/bin/python3`) | `/usr/bin/python3` | ❌ | ✅ (broken circular import) | ✅ | ✅ |
 
 The Weave database (`weave.lbug`) is storage version 41. Only the system `ladybug` package supports v41. The `real_ladybug` package (PyPI) only supports v40.
@@ -21,9 +21,9 @@ ln -s /usr/local/lib/python3.13/dist-packages/ladybug \
       /usr/local/lib/python3.13/dist-packages/real_ladybug
 
 # Python 3.11 venv: symlink real_ladybug -> ladybug (cross-version, works via __init__.py)
-rm -rf /usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/real_ladybug
+rm -rf $HERMES_INSTALL/venv/lib/python3.11/site-packages/real_ladybug
 ln -s /usr/local/lib/python3.13/dist-packages/ladybug \
-      /usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/real_ladybug
+      $HERMES_INSTALL/venv/lib/python3.11/site-packages/real_ladybug
 ```
 
 After this fix, both `import real_ladybug` and `import ladybug` work in both Python versions.

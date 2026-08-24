@@ -21,11 +21,11 @@ import sqlite3
 import sys
 from datetime import datetime
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 from merge_persons import merge  # noqa: E402
 
-DB = "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite"
-AUDIT_DIR = "/root/.hermes/profiles/indigo/commons/data/ocas-weave"
+DB = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite")
+AUDIT_DIR = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave")
 
 
 def live_facts(con, pid):

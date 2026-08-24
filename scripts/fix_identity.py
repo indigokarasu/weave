@@ -30,15 +30,15 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 
-DB = "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite"
-AUDIT_DIR = "/root/.hermes/profiles/indigo/commons/data/ocas-weave"
+DB = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite")
+AUDIT_DIR = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave")
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--apply", action="store_true")
 a = ap.parse_args()
 
 # ---- 1. teach the merge tool to record the trail
-P = "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts/merge_persons.py"
+P = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts/merge_persons.py")
 s = open(P).read()
 if "book_contact_redirect" in s:
     print("  1. merge tool already records the trail")

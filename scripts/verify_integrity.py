@@ -1,3 +1,4 @@
+import os
 """Integrity check that knows which table each edge type points at.
 
 Twice now a check that assumed one target table produced an alarming number:
@@ -9,7 +10,7 @@ table it actually references.
 import collections
 import sqlite3
 
-con = sqlite3.connect("/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite")
+con = sqlite3.connect(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
 con.row_factory = sqlite3.Row
 
 TARGET_TABLE = {"HasFact": "facts", "HasPreference": "preferences"}

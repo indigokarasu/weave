@@ -1,3 +1,4 @@
+import os
 """Where does the employment data actually come from?
 
 'Heriot-Watt University' for a Bay Area PM was not junk-SHAPED -- it read as a
@@ -19,7 +20,7 @@ import sys
 import urllib.parse
 import urllib.request
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 import google_sync as G
 
 INFERRED = {"scout_osint", "scout_research", "web_enrichment", "search",
@@ -27,7 +28,7 @@ INFERRED = {"scout_osint", "scout_research", "web_enrichment", "search",
             "scout_low_confidence"}
 OWNER = {"google_contacts", "user", "user-stated", "imported", "email_analysis"}
 
-con = sqlite3.connect("/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite")
+con = sqlite3.connect(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
 con.row_factory = sqlite3.Row
 
 print("=== org / occupation FACTS by source ===")
@@ -54,7 +55,7 @@ print("   persons with an org       : %d of %d" % (len(have_org), len(rows)))
 print("   persons with an occupation: %d of %d" % (len(have_occ), len(rows)))
 
 # what did GOOGLE have for these before this pipeline ever wrote to it?
-snap = json.load(open(sorted(glob.glob("/root/google-contacts-snapshot-*.json"))[0]))
+snap = json.load(open(sorted(glob.glob(os.path.join(os.path.expanduser("~"), "google-contacts-snapshot-*.json")))[0]))
 snap_org = {}
 for p in snap:
     o = (p.get("organizations") or [{}])[0]

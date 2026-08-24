@@ -1,3 +1,4 @@
+import os
 """How much of org/occupation is scrape junk, and can it be detected precisely?
 
 The examples Jared gave are four different failures:
@@ -20,10 +21,10 @@ import re
 import sqlite3
 import sys
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 from sweep_field_placement import _ROLE_WORDS
 
-con = sqlite3.connect("/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite")
+con = sqlite3.connect(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
 con.row_factory = sqlite3.Row
 contact_names = {r[0].strip().lower() for r in con.execute(
     "SELECT DISTINCT name FROM persons WHERE name IS NOT NULL AND name != ''")}

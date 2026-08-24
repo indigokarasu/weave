@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 """Normalise every contact URL in Google Contacts and remove duplicates.
 
 Google holds 3,829 URLs of which ~930 are the same link twice on one contact
@@ -23,7 +24,7 @@ import time
 import urllib.parse
 import urllib.request
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 import google_sync as G  # noqa: E402
 from url_norm import canonical_url, dedupe_key  # noqa: E402
 

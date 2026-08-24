@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 """Clear job-field junk by TESTING the value, not by matching a remembered string.
 
 The sweep matched google's value against the exact string weave held. When the two
@@ -9,11 +10,11 @@ previous cleanup carried this flaw.
 This reads what google actually holds and clears it if it fails the gate, so value
 drift cannot defeat it. Pass --apply to write."""
 import sys, json, sqlite3, urllib.request, urllib.parse, time
-sys.path.insert(0,"/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0,os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 import google_sync as gs
 from google_sync import is_implausible_job_value as bad
 tok=gs.get_access_token()
-con=sqlite3.connect("/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite")
+con=sqlite3.connect(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
 con.row_factory=sqlite3.Row
 APPLY="--apply" in sys.argv
 def api(u,m="GET",b=None):

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 """Re-canonicalise and de-duplicate the urls on GOOGLE contacts.
 
 weave was repaired already; Google still holds the damage. Two things are wrong
@@ -11,7 +12,7 @@ no-op, and never adds or removes a link -- it repairs spelling and collapses
 exact repeats.
 """
 import argparse, json, sys, time, urllib.parse, urllib.request
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 import google_sync as G
 from url_norm import canonical_url, dedupe_key
 

@@ -30,8 +30,8 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 
-DB = "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite"
-AUDIT_DIR = "/root/.hermes/profiles/indigo/commons/data/ocas-weave"
+DB = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite")
+AUDIT_DIR = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave")
 
 # Semantic person references that are NOT declared foreign keys, so
 # discover_refs() cannot find them.

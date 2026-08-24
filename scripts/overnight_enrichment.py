@@ -34,14 +34,27 @@ STATS_FILE = str(AGENT_ROOT / "data/weave-enrichment/stats.json")
 # Pipeline config
 SEARCH_DELAY = 3        # Seconds between searches (legacy; unused by scout path)
 SCOUT_TOP_SITES = 300   # maigret site breadth per contact (speed vs coverage)
-SYNC_EVERY = 30         # Sync to Google after this many enriched contacts
-DEADLINE_HOUR_ET = 8    # Stop at 8am ET
+# Each enriched contact is pushed to Google on its own, the moment it changes.
+# The old behaviour ran the WHOLE bidirectional sync every 30 enriched contacts:
+# ~10 connections.list pages inbound over all ~980 contacts, a 1000-per-page
+# dedupe index, and an etag batchGet for all 566 rows the bulk query selects --
+# 4.5 minutes and ~2,500 contact-reads a pass, 32 passes in a 970-contact run.
+# That read volume is what earned the HTTP 429s. A targeted push is 2 API calls.
+FULL_SYNC_EVERY = 200   # full bidirectional sync every N enriched contacts.
+                        # Still needed: INBOUND cannot be done per contact -- it
+                        # is how the owner's own Google edits come back -- and
+                        # creates need the whole-address-book dedupe index.
+# Stop at 8am ET so the nightly job is done before the day starts. Overridable
+# for a deliberate full sweep: a 970-contact pass takes ~12h, so a run started
+# in the small hours would otherwise be truncated at ~15% by a deadline meant
+# for the incremental nightly batch.
+DEADLINE_HOUR_ET = int(os.environ.get("WEAVE_DEADLINE_HOUR_ET", "8"))
 MIN_CONFIDENCE = 0.7
 # Bumped whenever the enrichment pipeline gains a capability. A contact that
 # failed under an OLDER version is retried immediately rather than serving out
 # its cooldown: the cooldown exists to avoid re-asking the same question, not
 # to lock a contact out after the question itself has improved.
-PIPELINE_VERSION = "2026-08-20.quality-gate"
+PIPELINE_VERSION = "2026-08-24.osint-full"
 
 RETRY_FAILED_DAYS = 7       # nothing found: retry weekly (was 30 — too long to
                             # wait for pipeline fixes to reach failed contacts)
@@ -338,6 +351,47 @@ def sync_to_google():
         log(f"Google sync error: {e}")
 
 
+def push_contact_to_google(contact_id, name=""):
+    """Push THIS contact to Google now, instead of re-syncing the address book.
+
+    Two API calls (one batchGet for the etag and current field values, one
+    batchUpdateContacts for the single contact), about 2.5s. Runs in-process so
+    there is no interpreter start and no token re-read per contact.
+
+    Every gate the full outbound pass applies is applied here -- it is the same
+    function, scoped to one person id: enrichment-derived org/occupation/location
+    withheld (GATED_FIELDS), url_quality.is_person_profile on every url, the
+    blocked-host list, url_norm canonicalisation and dedupe, the implausible
+    job-value check, fill-only names and birthdays, list merges against Google's
+    current values, updateMask == the body's own keys, and the outbound checkpoint.
+    """
+    try:
+        from google_sync import load_config, push_person
+    except Exception as e:  # noqa: BLE001
+        log(f"  ! Google push unavailable: {str(e)[:120]}")
+        return None
+    try:
+        if not load_config().get("writeback", {}).get("google_contacts", False):
+            return None          # same gate the full sync honours
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        res = push_person(contact_id)
+    except Exception as e:  # noqa: BLE001
+        log(f"  ! Google push error for {name}: {str(e)[:150]}")
+        return None
+    if res.get("outbound_pushed"):
+        log("  → Google updated")
+    elif (res.get("outbound_failed") or res.get("outbound_stale")
+          or res.get("outbound_rate_limited")):
+        log(f"  ! Google push did not land for {name}: "
+            f"failed={res.get('outbound_failed')} stale={res.get('outbound_stale')} "
+            f"rate_limited={res.get('outbound_rate_limited')}")
+    else:
+        log("  · nothing to push to Google (no linked contact or no pushable field)")
+    return res
+
+
 def is_past_deadline():
     """Check if we've passed 8am ET."""
     now_et = datetime.now(ZoneInfo("America/New_York"))
@@ -447,7 +501,24 @@ def main():
         wait = REFRESH_ENRICHED_DAYS if had_fields else RETRY_FAILED_DAYS
         return (now - last_ts).days >= wait
 
+    # A targeted re-run: only these contacts, by name, one per line. Used when a
+    # pipeline change helps a KNOWN subset -- re-running the other 217 contacts
+    # that gained no new signal is pure cost for a guaranteed identical result.
+    _only_file = os.environ.get("WEAVE_ONLY_FILE", "").strip()
+    _only = set()
+    if _only_file and os.path.exists(_only_file):
+        with open(_only_file, encoding="utf-8") as _fh:
+            _only = {ln.strip() for ln in _fh if ln.strip()}
+        log(f"Targeted run: {len(_only)} named contact(s) from {_only_file}")
+
     eligible = [c for c in contacts if off_cooldown(c)]
+    if _only:
+        eligible = [c for c in eligible if (c.get("name") or "").strip() in _only]
+        _found = {(c.get("name") or "").strip() for c in eligible}
+        _missing = _only - _found
+        if _missing:
+            log(f"Targeted run: {len(_missing)} named contact(s) not eligible/found: "
+                f"{sorted(_missing)[:8]}")
     log(f"Off cooldown and eligible tonight: {len(eligible)} "
         f"(cooling down: {len(contacts) - len(eligible)})")
 
@@ -567,8 +638,16 @@ def main():
             enriched_count += 1
             save_progress(contact_id, name, written_fields)
 
-            if enriched_count % SYNC_EVERY == 0:
-                log(f"  [{enriched_count} enriched so far — syncing to Google]")
+            # Push this one contact right now. Batching the pushes is what was
+            # rate limiting the run, and it also meant a contact enriched at
+            # 23:05 did not reach Google until the next 30 were done.
+            push_contact_to_google(contact_id, name)
+
+            # Inbound still has to be a full pass: it is how the owner's own
+            # edits in Google come back into weave, and it cannot be scoped to
+            # one contact.
+            if enriched_count % FULL_SYNC_EVERY == 0:
+                log(f"  [{enriched_count} enriched so far — periodic FULL sync]")
                 sync_to_google()
 
         except Exception as e:
@@ -584,10 +663,12 @@ def main():
     # that discovery stay live unless something sweeps them, so the sweep runs
     # here rather than waiting to be noticed. Measured: the blocked set grew
     # from 4 to 13 hosts over three runs, leaving 59 stale facts behind.
+    _PROF = os.environ.get("HERMES_HOME",
+                           os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo"))
     try:
         import subprocess as _sp
-        _sw = _sp.run(["/root/hermes-agent/.venv/bin/python",
-                       "/root/.hermes/profiles/indigo/skills/ocas-weave/"
+        _sw = _sp.run([sys.executable,
+                       f"{_PROF}/skills/ocas-weave/"
                        "scripts/sweep_blocked_sites.py", "--apply"],
                       capture_output=True, text=True, timeout=300)
         for _l in (_sw.stdout or "").strip().splitlines()[-3:]:
@@ -598,8 +679,8 @@ def main():
     # sweep matched a remembered string, so any drift between what weave held
     # and what google held left google's copy in place and inbound restored it.
     try:
-        _jf = _sp.run(["/root/hermes-agent/.venv/bin/python",
-                       "/root/.hermes/profiles/indigo/skills/ocas-weave/"
+        _jf = _sp.run([sys.executable,
+                       f"{_PROF}/skills/ocas-weave/"
                        "scripts/sweep_job_fields.py", "--apply"],
                       capture_output=True, text=True, timeout=600)
         for _l in (_jf.stdout or "").strip().splitlines()[-2:]:
@@ -627,3 +708,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+import os
+_PROF = os.environ.get("HERMES_HOME",
+                       os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo"))

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 """Second-pass audit: classes the first sweep did not look for.
 
 The first audit is down to three classes, two of which are correct as they
@@ -12,8 +13,8 @@ import sqlite3
 import sys
 from datetime import datetime
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
-con = sqlite3.connect("/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
+con = sqlite3.connect(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
 con.row_factory = sqlite3.Row
 persons = {r["id"]: dict(r) for r in con.execute("SELECT * FROM persons")}
 facts = con.execute(

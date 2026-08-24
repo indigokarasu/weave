@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 """Junk in the COMPANY field specifically.
 
 The title pass is done. Org has a different failure shape, visible in the value
@@ -26,7 +27,7 @@ import re
 import sqlite3
 import sys
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 
 COMPANY_HINT = re.compile(
     r"\b(inc|llc|ltd|corp|co|company|gmbh|plc|group|labs?|studios?|agency|bank|"
@@ -89,7 +90,7 @@ def classify_org(value, contact_name, person_markers):
 
 if __name__ == "__main__":
     con = sqlite3.connect(
-        "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite")
+        os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
     con.row_factory = sqlite3.Row
     rows = list(con.execute(
         "SELECT id pid, name, name_given, name_family, org v, email, phone, "

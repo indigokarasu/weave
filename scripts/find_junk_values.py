@@ -1,3 +1,4 @@
+import os
 """Locate the values Jared named, wherever they live, and dump the occupation
 values so the junk is visible rather than inferred from shape."""
 import collections
@@ -8,10 +9,10 @@ import sys
 import urllib.parse
 import urllib.request
 
-sys.path.insert(0, "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts")
+sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 import google_sync as G
 
-con = sqlite3.connect("/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite")
+con = sqlite3.connect(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
 con.row_factory = sqlite3.Row
 
 FRAGMENTS = ["Heriot", "Past Chiefs", "FounderThe", "Trust Issues",

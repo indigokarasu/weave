@@ -40,6 +40,8 @@ if set(sys.argv[1:]) & _HELP_ARGS:
 
 
 PROFILE = os.environ.get("HERMES_PROFILE", "indigo")
+_PROF = os.environ.get("HERMES_HOME",
+                       os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo"))
 
 # Base URLs for providers that don't carry one in config. Purely a lookup
 # table — the profile config decides which (if any) is ever used.
@@ -975,7 +977,191 @@ def discover_by_email(email, subject_name="", searxng_url=None, stats=None):
     return out
 
 
-def build_scout_queries(name, name_given="", name_family="", org="", occupation="", location_city=""):
+
+_FREE_MAIL_HOSTS = (
+    "gmail.", "googlemail.", "yahoo.", "ymail.", "hotmail.", "outlook.", "live.",
+    "msn.", "aol.", "icloud.", "me.com", "mac.com", "proton", "pm.me", "fastmail",
+    "hey.com", "zoho.", "gmx.", "web.de", "mail.ru", "comcast.", "verizon.",
+    "att.net", "sbcglobal.", "cox.net", "earthlink.", "yandex.", "qq.com",
+    "163.com", "126.com", "naver.", "duck.com", "tutanota.", "posteo.",
+)
+
+
+def org_from_email_domain(email, person_name=""):
+    """A company name implied by a work email address, or "".
+
+    A corporate address names the employer directly -- abhinav@innovaccer.com is
+    Innovaccer -- and that is the single strongest disambiguator available for a
+    common name. It was going unused: queries were built only from persons.org,
+    so a contact whose org was empty searched with no company at all, and one
+    whose org held enrichment junk searched with the WRONG company. Of the
+    work-email contacts this pipeline failed on, 32 had an org that disagreed
+    with their own domain (@envoy.com filed under 'Discover', @capitalone.com
+    under 'LF', @angloamerican.com under 'Google').
+
+    Two kinds of domain must NOT be treated as an employer:
+      * free mail -- gmail.com says nothing about anyone.
+      * a vanity domain built from the person's own name -- munrovia.com,
+        frankienicoletti.com, jamesso.ng. Searching "Frankie Nicoletti" AND
+        "frankienicoletti" just repeats the name and narrows nothing.
+    """
+    email = (email or "").strip().lower()
+    if "@" not in email:
+        return ""
+    dom = email.split("@")[-1].strip()
+    if not dom or "." not in dom:
+        return ""
+    if any(f in dom for f in _FREE_MAIL_HOSTS):
+        return ""
+    labels = [l for l in dom.split(".") if l]
+    # drop the public suffix; keep the registrable label
+    if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in (
+            "co", "com", "org", "net", "ac", "gov", "edu"):
+        root = labels[-3]
+    elif len(labels) >= 2:
+        root = labels[-2]
+    else:
+        root = labels[0]
+    # a mail subdomain is not the company name
+    if root in ("mail", "email", "smtp", "mx", "corp", "info", "news", "inbox"):
+        root = labels[0] if labels and labels[0] not in ("mail", "email") else root
+    flat = re.sub(r"[^a-z0-9]", "", root)
+    if len(flat) < 3:
+        return ""
+    if _domain_is_the_person(flat, person_name):
+        return ""
+    return root
+
+
+def _domain_is_the_person(flat, person_name):
+    """Is this domain built out of the contact's own name rather than a company?"""
+    parts = [re.sub(r"[^a-z0-9]", "", w.lower())
+             for w in re.findall(r"[^\W\d_]+", person_name or "", re.UNICODE)]
+    parts = [p for p in parts if len(p) > 2]
+    if not parts:
+        return False
+    joined = "".join(parts)
+    if flat == joined or joined in flat or flat in joined:
+        return True
+    if sum(1 for p in parts if p in flat) >= 2:
+        return True
+    if len(parts) == 1 and parts[0] == flat:
+        return True
+    # A vanity domain usually EXTENDS a name part: munrovia.com from Munro,
+    # jamesso.ng from James So. Require strictly longer, so that a person named
+    # Ford working at ford.com still resolves to the company.
+    for p in parts:
+        if len(p) >= 4 and flat.startswith(p) and len(flat) > len(p):
+            return True
+    return False
+
+
+def personal_site_from_email(email, person_name="", is_person=True):
+    """The contact's OWN website, inferred from a vanity email domain.
+
+    rusty@munrovia.com means munrovia.com is Rusty Munro's site, not his
+    employer. Treating that only as "not a company" and discarding it threw away
+    the single richest page available for the contact: a personal site carries
+    the phone number, the city, the other profile links and often a second email
+    — exactly the fields enrichment is trying to fill, stated by the person
+    themselves rather than inferred from a search result.
+
+    Returns an https url, or "" when the domain is free mail or belongs to a
+    company (a company's site is not this person's page and says nothing about
+    them individually).
+    """
+    # Only a PERSON has a personal site. A company contact's name IS the
+    # company, so "the domain matches the name" fires for AlphaSights ->
+    # alphasights.com and Ramp -> ramp.com, which are corporate sites, not
+    # somebody's page. And a contact whose NAME field holds an email address
+    # (katie@pictalhealth.com) makes her employer's domain look like a vanity
+    # domain. Neither is a personal site, and treating them as one also
+    # suppresses the employer search term they should be getting.
+    if not is_person:
+        return ""
+    if "@" in (person_name or ""):
+        return ""
+    email = (email or "").strip().lower()
+    if "@" not in email:
+        return ""
+    dom = email.split("@")[-1].strip().strip(".")
+    if not dom or "." not in dom:
+        return ""
+    if any(f in dom for f in _FREE_MAIL_HOSTS):
+        return ""
+    labels = [l for l in dom.split(".") if l]
+    # a mail host is not a browsable site
+    if labels[0] in ("mail", "smtp", "mx", "email", "imap", "pop"):
+        labels = labels[1:]
+    if len(labels) < 2:
+        return ""
+    dom = ".".join(labels)
+    if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in (
+            "co", "com", "org", "net", "ac", "gov", "edu"):
+        root = labels[-3]
+    else:
+        root = labels[-2]
+    flat = re.sub(r"[^a-z0-9]", "", root)
+    if len(flat) < 3:
+        return ""
+    if not _domain_is_the_person(flat, person_name):
+        return ""                      # a company domain, not the contact's page
+    return "https://" + dom
+
+
+
+def phone_query_forms(phone, region_hint=""):
+    """The ways a phone number is written on a page, for exact-match search.
+
+    A phone number is the most nearly unique thing a contact record holds -- far
+    stronger than a name -- and it was going completely unused: research_person
+    accepts `phone` but only records it as a finding, never searches it. Half of
+    the contacts this pipeline fails on (125 of 255) have one.
+
+    Pages write the same number many ways, so an exact-phrase search has to try
+    each: '(415) 555-1234', '415-555-1234', '+14155551234'. Returns the distinct
+    forms, most human-readable first, or [] when the number is not valid (a
+    malformed number would only match junk).
+    """
+    raw = (phone or "").strip()
+    if not raw:
+        return []
+    try:
+        import phonenumbers as _pn
+    except Exception:  # noqa: BLE001
+        digits = re.sub(r"\D", "", raw)
+        return [raw] if len(digits) >= 7 else []
+    for region in ([region_hint] if region_hint else []) + [None, "US"]:
+        try:
+            p = _pn.parse(raw, region)
+        except Exception:  # noqa: BLE001
+            continue
+        if not _pn.is_valid_number(p):
+            continue
+        nat = _pn.format_number(p, _pn.PhoneNumberFormat.NATIONAL)
+        intl = _pn.format_number(p, _pn.PhoneNumberFormat.INTERNATIONAL)
+        e164 = _pn.format_number(p, _pn.PhoneNumberFormat.E164)
+        dashed = re.sub(r"[()\s]+", "-", nat).strip("-")
+        # A national form that drops the country code can be too short to be
+        # distinctive -- a Danish +45 61 77 06 99 becomes '61 77 06 99', eight
+        # bare digits that will match unrelated pages. Only lead with the
+        # national form when it carries enough digits to identify one line;
+        # otherwise put the international form first.
+        nat_digits = len(re.sub(r"\D", "", nat))
+        order = ((nat, dashed, intl, e164) if nat_digits >= 10
+                 else (intl, e164, nat, dashed))
+        forms, seen = [], set()
+        for f in order:
+            f = f.strip()
+            if f and f not in seen:
+                seen.add(f)
+                forms.append(f)
+        return forms
+    return []
+
+
+def build_scout_queries(name, name_given="", name_family="", org="", occupation="",
+                        location_city="", email="", phone="", location_country=""):
     """Build scout queries, most-specific first.
 
     TIER 1: site: filters (LinkedIn, GitHub, Crunchbase)
@@ -993,6 +1179,26 @@ def build_scout_queries(name, name_given="", name_family="", org="", occupation=
         return []
 
     queries = []
+
+    # TIER -1: the phone number, quoted. The single most identifying thing on a
+    # contact record -- two people do not share a number -- so an exact-phrase
+    # hit is near-proof, where a name match is only a hint. Tried in the two
+    # forms a page is most likely to use.
+    _forms = phone_query_forms(phone, "")
+    if _forms:
+        queries.append('"%s"' % _forms[0])
+        if len(_forms) > 1:
+            queries.append('"%s" OR "%s"' % (_forms[1], _forms[-1]))
+
+    # TIER 0: the employer implied by a work email address. Placed first because
+    # it is evidence from the contact's own record rather than a value some
+    # earlier enrichment guessed, so where the two disagree this one is likelier
+    # to be right.
+    domain_org = org_from_email_domain(email, safe_name)
+    if domain_org and re.sub(r"[^a-z0-9]", "", domain_org) not in re.sub(
+            r"[^a-z0-9]", "", org.lower()):
+        queries.append(f'site:linkedin.com "{safe_name}" {domain_org}')
+        queries.append(f'"{safe_name}" AND {domain_org}')
 
     # TIER 1: site: filters
     if org:
@@ -1015,8 +1221,11 @@ def build_scout_queries(name, name_given="", name_family="", org="", occupation=
         queries.append(f'{safe_name} {org} {city_head}')
     if not org and occupation:
         queries.append(f'"{safe_name}" {occupation}')
-    if not org and city_head:
+    if city_head:
         queries.append(f'"{safe_name}" {city_head}')
+    elif location_country.strip():
+        # no city, but a country still narrows a common name
+        queries.append(f'"{safe_name}" {location_country.strip()}')
 
     # TIER 4: fallback
     queries.append(f'{safe_name} professional')
@@ -1029,7 +1238,7 @@ def build_scout_queries(name, name_given="", name_family="", org="", occupation=
             result.append(q)
             seen.add(q)
 
-    return result[:8]
+    return result[:10]
 
 
 def build_scout_queries_for_person(person):
@@ -1045,6 +1254,9 @@ def build_scout_queries_for_person(person):
         org=get("org", ""),
         occupation=get("occupation", ""),
         location_city=get("location_city", ""),
+        email=get("email", ""),
+        phone=get("phone", ""),
+        location_country=get("location_country", ""),
     )
 
 
@@ -1299,13 +1511,25 @@ def sift_extract_from_pages(name, search_results, max_pages=3, context=None):
     return extracted
 
 
-SCOUT_SCRIPTS_DIR = "/root/.hermes/profiles/indigo/skills/ocas-scout/scripts"
+SCOUT_SCRIPTS_DIR = f"{_PROF}/skills/ocas-scout/scripts"
 _IDENTITY_ORDER = {"high": 3, "med": 2, "low": 1, "none": 0, "error": 0}
 
 # Single-valued predicates: a person has ~one current value, so a new differing
 # value SUPERSEDES the old (old stays, stamped invalid). Everything else is
 # multi-valued and accumulates — people can have several addresses, phones,
 # emails, or social profiles, all valid at once.
+_EMAIL_SHAPE = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[A-Za-z]{2,}$")
+
+# Addresses that belong to a system rather than a person. A commit-metadata
+# harvest returns these constantly -- GitHub's own privacy relay, CI bots,
+# noreply senders -- and none of them is a way to reach the contact.
+_NON_PERSON_MAIL_HOSTS = {
+    "users.noreply.github.com", "noreply.github.com", "github.com",
+    "example.com", "example.org", "localhost", "invalid",
+    "noreply.google.com", "bots.noreply.github.com",
+}
+
+
 SINGLE_VALUED_PREDICATES = {"org", "occupation", "pronouns"}
 
 
@@ -1466,6 +1690,21 @@ def scout_research_contact(contact, top_sites=300):
     # the curated-URL path never ran in the nightly pipeline and contacts with no
     # email but a known employer, job title and personal site looked unsearchable.
     known_urls = curated_urls_for_contact(get("id", "") or "")
+    # A vanity email domain IS the contact's website. It is not in the curated
+    # list unless somebody typed it there, yet it is the best page available:
+    # the person's own site, listing their phone, city, other profiles and often
+    # a second address. Fetching it turns a contact with "no anchor" into one
+    # with a first-party source.
+    # A real person has both name parts; a company contact has only a given name.
+    _is_person = bool((get("name_given", "") or "").strip()
+                      and (get("name_family", "") or "").strip())
+    _site = personal_site_from_email(get("email", "") or "", get("name", "") or "",
+                                     is_person=_is_person)
+    if _site:
+        _seen = {str(u).rstrip("/").lower() for u in known_urls}
+        if _site.rstrip("/").lower() not in _seen:
+            known_urls = list(known_urls) + [_site]
+            log(f"  scout: + personal site inferred from the email domain: {_site}")
     if known_urls:
         log(f"  scout: {len(known_urls)} curated url(s) from the contact record")
     return research_person(
@@ -1577,7 +1816,7 @@ def _is_job_junk(value, person_name, field):
         return None
     try:
         import sqlite3 as _s
-        _c = _s.connect("/root/.hermes/profiles/indigo/commons/db/ocas-weave/"
+        _c = _s.connect(f"{_PROF}/commons/db/ocas-weave/"
                         "weave.sqlite", timeout=10)
         _names = {r[0].strip().lower() for r in _c.execute(
             "SELECT DISTINCT name FROM persons WHERE name IS NOT NULL "
@@ -1657,6 +1896,29 @@ def store_scout_findings(contact_id, res, person_name="", db_path=None,
             multi.append((pred, val, src, c))
 
     enr = res.get("enrichment", {}) or {}
+
+    # An email scout discovered -- harvested from a confirmed GitHub profile's
+    # commit metadata, or read off the contact's own site -- was being computed
+    # and then dropped: this loop never looked at the key, so nothing persisted.
+    # That silently discarded the single most valuable thing the pipeline can
+    # find, because an email is the anchor every later run pivots from; a
+    # contact with one fails ~9% of the time, without one ~91%.
+    #
+    # Held to the same bar as any other sourced field: scout only sets this when
+    # the address is name-confirmed (an unconfirmed harvest stays an unverified
+    # candidate and never reaches `enrichment`), and it is written as a
+    # multi-valued fact, so it accumulates rather than overwriting an address
+    # the owner typed.
+    _em = enr.get("email")
+    if isinstance(_em, str) and _em.strip():
+        _em = _em.strip()
+        if not _EMAIL_SHAPE.match(_em):
+            log(f"  refused email {_em!r}: not an address")
+        elif _em.lower().split("@")[-1] in _NON_PERSON_MAIL_HOSTS:
+            log(f"  refused email {_em!r}: a role/noreply host, not a person")
+        else:
+            _add("email", _em, enr.get("email_source", "scout_osint"), conf)
+
     for k in ("org", "location_city", "website", "pronouns"):
         v = enr.get(k)
         if isinstance(v, str) and v.strip():
@@ -1907,3 +2169,6 @@ def enrich_weave_contact(contact_id, enrichment_data, confidence=0.7,
         written += 1
 
     return written > 0
+import os
+_PROF = os.environ.get("HERMES_HOME",
+                       os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo"))

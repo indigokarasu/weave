@@ -29,6 +29,9 @@ Dry run by default. --apply writes. --limit N caps member additions per directio
 'Company' and seeds it from the classification already produced by
 company_label.py (~/work/company-label/plan.json) -- it does not reclassify.
 """
+import os as _os
+_PROF = _os.environ.get("HERMES_HOME") or _os.path.join(
+    _os.path.expanduser("~"), ".hermes", "profiles", "indigo")
 import argparse
 import json
 import os
@@ -464,7 +467,6 @@ if set(sys.argv[1:]) & _HELP and len(sys.argv) == 2:
     print((__doc__ or "").strip())
     sys.exit(0)
 
-main()
-import os as _os
-_PROF = _os.environ.get("HERMES_HOME") or _os.path.join(
-    _os.path.expanduser("~"), ".hermes", "profiles", "indigo")
+if __name__ == "__main__":
+    main()
+

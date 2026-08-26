@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+import os as _os
+_PROF = _os.environ.get("HERMES_HOME") or _os.path.join(
+    _os.path.expanduser("~"), ".hermes", "profiles", "indigo")
 import os
-_PROF = os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo"))
 """
 Classify Google contacts as companies (not people), then:
   1. add them to a Google contact group ("label") named 'company'
@@ -24,6 +26,7 @@ import urllib.parse
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
 
 SCRIPTS = f"{_PROF}/skills/ocas-weave/scripts"
 sys.path.insert(0, SCRIPTS)
@@ -506,4 +509,5 @@ def main():
     conn.close()
 
 
-main()
+if __name__ == "__main__":
+    main()

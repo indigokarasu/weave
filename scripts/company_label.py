@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import os
+_PROF = os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo"))
 """
 Classify Google contacts as companies (not people), then:
   1. add them to a Google contact group ("label") named 'company'
@@ -23,12 +25,12 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCRIPTS = "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts"
+SCRIPTS = f"{_PROF}/skills/ocas-weave/scripts"
 sys.path.insert(0, SCRIPTS)
 
-WORK = Path("/root/work/company-label")
+WORK = Path(os.path.join(os.path.expanduser("~"), "work", "company-label"))
 PEOPLE_CACHE = WORK / "people.json"
-DB = "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite"
+DB = f"{_PROF}/commons/db/ocas-weave/weave.sqlite"
 GROUP_NAME = "company"
 
 MULTI_TLD = {"ac.uk", "co.uk", "org.uk", "com.au", "co.jp", "co.nz", "co.in",

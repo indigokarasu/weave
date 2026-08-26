@@ -1512,7 +1512,7 @@ def sync_outbound(token, last_sync_at, only_person_ids=None):
                             # etag would overwrite whatever changed. That is not
                             # a retry, it is a silent revert: it undid six
                             # phone-number corrections made by a concurrent
-                            # process, and it would just as happily undo Jared's
+                            # process, and it would just as happily undo the operator's
                             # own edit. Google's guidance is to re-read the
                             # person and merge INTO the latest version.
                             #

@@ -2,7 +2,7 @@
 """Retire the 'website' facts that are really mangled email addresses.
 
 The old inbound classifier prepended a scheme to whatever sat in a url slot, so
-'artsinbox@gmail.com' parsed as userinfo + host and became the website
+'sample.user@example.com' parsed as userinfo + host and became the website
 'https://gmail.com'. Dozens of unrelated people ended up sharing one meaningless
 'website'. url_norm now rejects a bare email outright; this clears what the old
 behaviour already wrote.

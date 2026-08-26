@@ -62,9 +62,9 @@ def test_no_extraction_confidence_anywhere():
 
 
 def test_matching_profile_is_kept():
-    page = 'See <a href="https://github.com/tomasvega">my GitHub</a> for code.'
-    s = extract_links_from_page(page, "", "Tomas Vega")
-    assert "tomasvega" in s["candidates"]["github"], s
+    page = 'See <a href="https://github.com/cedarquill">my GitHub</a> for code.'
+    s = extract_links_from_page(page, "", "Cedar Quill")
+    assert "cedarquill" in s["candidates"]["github"], s
 
 
 def test_unrelated_handle_containing_no_name_token_dropped():
@@ -76,10 +76,10 @@ def test_unrelated_handle_containing_no_name_token_dropped():
 # ── Email / twitter leakage ───────────────────────────────────────────────
 
 def test_email_never_becomes_twitter_handle():
-    s = extract_links_from_page("mail me at tomasvega.design@fastmail.com", "", "Tomas Vega")
+    s = extract_links_from_page("mail me at cedarquill.design@fastmail.com", "", "Cedar Quill")
     assert s["candidates"]["twitter"] == [], s
     assert len(s["emails"]) == 1, s
-    assert s["emails"][0]["addr"] == "tomasvega.design@fastmail.com"
+    assert s["emails"][0]["addr"] == "cedarquill.design@fastmail.com"
     assert s["emails"][0]["name_consistent"] is True
 
 
@@ -119,8 +119,8 @@ def test_screen_rejects_kidzone_for_owen_castile():
 
 
 def test_screen_candidate_when_family_name_present():
-    page = "Wren Keeley spoke at the design conference in Portland."
-    r = verify_identity_from_page(page, "Wren Keeley")
+    page = "Fern Wick spoke at the design conference in Portland."
+    r = verify_identity_from_page(page, "Fern Wick")
     assert r["verdict"] == "candidate"
     assert r["hints"]["family_name_present"] is True
 
@@ -159,9 +159,9 @@ def test_anchor_gate_refuses_org_shaped_name():
 
 
 def test_anchor_gate_passes_normal_names():
-    assert has_sufficient_anchors({"name": "Wren Keeley"})[0] is True
+    assert has_sufficient_anchors({"name": "Fern Wick"})[0] is True
     assert has_sufficient_anchors({"name": "Owen Castile"})[0] is True
-    assert has_sufficient_anchors({"name": "Tomas Vega"})[0] is True
+    assert has_sufficient_anchors({"name": "Cedar Quill"})[0] is True
 
 
 def test_anchor_gate_empty_and_none():
@@ -189,18 +189,18 @@ def test_anchor_gate_junk_family_name_does_not_rescue():
 
 def test_email_handle_distinctive_local():
     # A distinctive single-token local part must pass through verbatim.
-    assert email_handle_variants("larkfielding@fastmail.com") == ["larkfielding"]
+    assert email_handle_variants("birchmantle@fastmail.com") == ["birchmantle"]
 
 
 def test_email_handle_dotted_local_expands():
-    v = email_handle_variants("tomasvega.design@fastmail.com")
-    assert "tomasvega.design" in v          # verbatim
-    assert "tomasvegadesign" in v           # separators squashed
-    assert "tomasvega-design" in v          # dotted -> dashed (github style)
+    v = email_handle_variants("cedarquill.design@fastmail.com")
+    assert "cedarquill.design" in v          # verbatim
+    assert "cedarquilldesign" in v           # separators squashed
+    assert "cedarquill-design" in v          # dotted -> dashed (github style)
 
 
 def test_email_handle_strips_plus_addressing():
-    assert email_handle_variants("larkfielding+news@gmail.com") == ["larkfielding"]
+    assert email_handle_variants("birchmantle+news@gmail.com") == ["birchmantle"]
 
 
 def test_email_handle_rejects_generic_and_short():
@@ -213,7 +213,7 @@ def test_email_handle_rejects_generic_and_short():
 
 def test_parse_github_api_user_real_shape():
     # The real-world response shape.
-    body = ('{"login":"larkfielding","name":"Wren Jane Keeley",'
+    body = ('{"login":"birchmantle","name":"Wren Jane Keeley",'
             '"company":"University of Miami","location":"Miami",'
             '"blog":"https://microlydee.wordpress.com/","bio":"bioinformatics","email":null}')
     f = parse_github_api_user(body)
@@ -307,7 +307,7 @@ def test_city_used_even_when_org_present():
 
 def test_queries_for_person_none_fields():
     qs = build_scout_queries_for_person({
-        "name": "Wren Keeley", "name_given": None, "name_family": None,
+        "name": "Fern Wick", "name_given": None, "name_family": None,
         "org": None, "occupation": None, "location_city": None,
     })
     assert len(qs) > 0

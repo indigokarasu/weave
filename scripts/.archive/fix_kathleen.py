@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Remove the false enrichment attached to Kathleen Dunkel.
 
-She is Jared's maternal aunt (Debra's sister), per the email_analysis notes on
+She is the operator's maternal aunt (Debra's sister), per the email_analysis notes on
 her own record, which place her in Dallas and then London -- her +1 469 number is
 a Dallas area code. Enrichment attached a South African provincial government to
 her and put its recruitment mailbox in her email field, in weave AND in google.
 One of the two weave rows was even flagged enrichment_status='enriched_corrupt'.
 
 Removed:
-  email      e-recruitment@gauteng.gov.za   an org's recruitment mailbox
+  email      recruitment@example-gov.example   an org's recruitment mailbox
   org        Gauteng Provincial Government / 'Professional'
   title      'Williams'                     a surname in a job-title field
   location   Johannesburg, South Africa
@@ -31,7 +31,7 @@ import google_sync as G  # noqa: E402
 DB = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite")
 AUDIT_DIR = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/data/ocas-weave")
 RN = "people/c3884260161778540397"
-BAD_EMAIL = "e-recruitment@gauteng.gov.za"
+BAD_EMAIL = "recruitment@example-gov.example"
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--apply", action="store_true")

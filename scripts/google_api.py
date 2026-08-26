@@ -25,12 +25,24 @@ TOKEN_PATH = Path(CREDS_DIR) / f"{OPERATOR_EMAIL}.json"
 PEOPLE_API_BASE = 'https://people.googleapis.com/v1'
 
 
-def get_access_token():
-    """Get valid Google OAuth token, refreshing if needed."""
+def get_access_token(force_refresh=False):
+    """Get a valid Google OAuth token, refreshing if needed.
+
+    force_refresh mints a new one even when the cached token looks current. A
+    cached access token can be NARROWER than the grant behind it: something
+    wrote a token carrying only contacts.readonly, stamped with an hour of
+    validity, and because the expiry was in the future this function kept
+    handing it back. Every People write failed with 403
+    ACCESS_TOKEN_SCOPE_INSUFFICIENT while the refresh token itself still granted
+    48 scopes including contacts write -- so the credential looked healthy and
+    the sync was dead. An unexpired token is not evidence of a usable one.
+    """
     with open(TOKEN_PATH) as f:
         token_data = json.load(f)
     token = token_data.get('token', '')
     expiry = token_data.get('expiry', '')
+    if force_refresh and not expiry:
+        expiry = '1970-01-01T00:00:00+00:00'   # make the branch below fire
     if expiry:
         try:
             if isinstance(expiry, (int, float)):
@@ -39,7 +51,8 @@ def get_access_token():
                 exp_dt = datetime.fromisoformat(str(expiry).replace('Z', '+00:00'))
                 if exp_dt.tzinfo is None:
                     exp_dt = exp_dt.replace(tzinfo=timezone.utc)
-            if datetime.now(timezone.utc) >= exp_dt and token_data.get('refresh_token'):
+            if (force_refresh or datetime.now(timezone.utc) >= exp_dt) \
+                    and token_data.get('refresh_token'):
                 data = urllib.parse.urlencode({
                     'client_id': token_data.get('client_id', ''),
                     'client_secret': token_data.get('client_secret', ''),

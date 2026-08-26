@@ -1,7 +1,7 @@
 import os
 """Every org and occupation value, so the junk patterns are visible rather than guessed.
 
-Jared named five: "Contact Me Book Katie Allen to speak", "Trust Issues",
+the operator named five: "Contact Me Book Katie Allen to speak", "Trust Issues",
 "Heriot, Watt", "Franklin, Past Chiefs", "franklin, r and FounderThe long".
 Those are not one defect -- they look like at least four:
   a call-to-action sentence, a comma-split proper noun, a truncated fragment,
@@ -25,7 +25,7 @@ con.row_factory = sqlite3.Row
 
 NAMED = ["Contact Me Book Katie Allen to speak", "Trust Issues", "Heriot, Watt",
          "Franklin, Past Chiefs", "franklin, r and FounderThe long"]
-print("=== the five Jared named: does the existing checker catch them? ===")
+print("=== the five the operator named: does the existing checker catch them? ===")
 for v in NAMED:
     verdict = is_implausible_job_value(v) if is_implausible_job_value else "n/a"
     print("   %-42r -> %s" % (v, verdict))

@@ -2,7 +2,7 @@
 """Two more classes from the audit.
 
 A. Three contacts whose NAME is an email address. A name field holding
-   'katie@pictalhealth.com' is unusable for matching, display or relation
+   'someone@examplehealth.test' is unusable for matching, display or relation
    resolution. Derive a name from the local part where it plainly encodes one
    (first.last / first_last), and leave it alone otherwise rather than guessing.
 

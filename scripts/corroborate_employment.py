@@ -6,7 +6,7 @@ import os
 was simply false. No string rule catches that. What can be checked is whether
 anything ELSE about the contact agrees with it:
 
-    someone@examplehealth.test -> 'Pictal Health'   the email domain says so
+    someone@examplehealth.test -> 'Example Health'   the email domain says so
     Ankita Akerkar         -> 'Google'          she has a developers.google.com
                                                 profile
     Kim Appelquist         -> 'Heriot-Watt'     nothing at all

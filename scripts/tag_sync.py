@@ -27,7 +27,7 @@ addresses or phoneNumbers.
 Dry run by default. --apply writes. --limit N caps member additions per direction
 (canary). --seed-company additionally ensures a Google group named exactly
 'Company' and seeds it from the classification already produced by
-company_label.py (/root/work/company-label/plan.json) -- it does not reclassify.
+company_label.py (~/work/company-label/plan.json) -- it does not reclassify.
 """
 import argparse
 import json
@@ -43,12 +43,12 @@ from datetime import datetime, timezone
 
 _HELP = {"--help", "-h"}
 
-SCRIPTS = "/root/.hermes/profiles/indigo/skills/ocas-weave/scripts"
+SCRIPTS = f"{_PROF}/skills/ocas-weave/scripts"
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-DB = "/root/.hermes/profiles/indigo/commons/db/ocas-weave/weave.sqlite"
-PLAN = "/root/work/company-label/plan.json"
+DB = f"{_PROF}/commons/db/ocas-weave/weave.sqlite"
+PLAN = f"{_os.path.expanduser(chr(126))}/work/company-label/plan.json"
 COMPANY_TAG = "Company"
 
 # server/lib/tagPolicy.ts -- SYSTEM_TAG_TYPES
@@ -465,3 +465,6 @@ if set(sys.argv[1:]) & _HELP and len(sys.argv) == 2:
     sys.exit(0)
 
 main()
+import os as _os
+_PROF = _os.environ.get("HERMES_HOME") or _os.path.join(
+    _os.path.expanduser("~"), ".hermes", "profiles", "indigo")

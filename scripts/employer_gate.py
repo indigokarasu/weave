@@ -5,8 +5,8 @@ employer and was simply false, so no string rule could ever have caught it.
 What distinguishes it from a true find is not the string, it is that nothing
 else about the contact points there:
 
-    katie@pictalhealth.com   -> 'Pictal Health'   the email domain says so
-    bedard@meta.com          -> 'Facebook AI'     Facebook IS Meta
+    casey@examplehealth.example   -> 'Example Health'   the email domain says so
+    sample.person@meta.example          -> 'Facebook AI'     Facebook IS Meta
     Kim Appelquist           -> 'Heriot-Watt'     nothing, anywhere
 
 So a crawler's guess about where someone works is held out of the visible

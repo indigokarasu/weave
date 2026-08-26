@@ -1,7 +1,7 @@
 import os
 """How much of org/occupation is scrape junk, and can it be detected precisely?
 
-The examples Jared gave are four different failures:
+The examples the operator gave are four different failures:
   'Heriot' / 'Watt'                     one proper noun split across org+title
   'Franklin' / 'Past Chiefs'            same
   'Contact Me Book Katie Allen to speak' a call-to-action lifted from a page

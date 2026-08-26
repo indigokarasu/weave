@@ -116,7 +116,7 @@ def test_uncorroborated_org_not_promoted_to_node():
     is not.
     """
     path, db = _fresh_db()
-    db.execute_write("UPDATE persons SET email='someone@gmail.com' WHERE id=?", (CID,))
+    db.execute_write("UPDATE persons SET email='someone@example.com' WHERE id=?", (CID,))
 
     weave_enrich.store_scout_findings(
         CID, _research(enrichment={"org": "Heriot-Watt University"}),
@@ -201,6 +201,95 @@ def test_boilerplate_bio_filtered():
         person_name="Test Person", db_path=path)
     bios = _facts(db, "bio_summary")
     assert len(bios) == 0, "calendly boilerplate must not become a bio fact"
+
+
+# ---------------------------------------------------------------------------
+# Field-targeted enrichment: what the store path may and may not persist.
+# ---------------------------------------------------------------------------
+
+def _research_with_findings(enrichment=None, profiles=None, findings=None):
+    return {"identity": {"level": "high"},
+            "enrichment": enrichment or {},
+            "profiles": profiles or [],
+            "findings": findings or []}
+
+
+def test_account_on_is_never_written():
+    """account_on was 84% of this pipeline's entire output and is not contact
+    data: it says an address is registered somewhere, never whose account it is
+    -- the exact signal behind the earlier false attributions."""
+    path, db = _fresh_db()
+    res = _research_with_findings(findings=[{
+        "finding_id": "H001",
+        "claim": "Email is registered on: example.test, other.test.",
+        "confidence": "med",
+        "source_refs": [{"url": "holehe:a@example.test",
+                         "quote": "example.test, other.test"}]}])
+    weave_enrich.store_scout_findings(CID, res, person_name="Test Person",
+                                      db_path=path)
+    rows = db.execute(
+        "SELECT f.id FROM facts f JOIN edges e ON e.target_id=f.id "
+        "WHERE e.source_id=? AND f.predicate='account_on'", (CID,))
+    assert rows == [], f"account_on must not be persisted, got {len(rows)}"
+
+
+def test_phone_from_enrichment_is_written_and_normalised():
+    path, db = _fresh_db()
+    weave_enrich.store_scout_findings(
+        CID, _research_with_findings(enrichment={"phone": "(202) 555-0143"}),
+        person_name="Test Person", db_path=path)
+    vals = [f["value"] for f in _facts(db, "phone")]
+    assert vals == ["+12025550143"], f"expected E.164, got {vals}"
+
+
+def test_invalid_phone_is_refused():
+    path, db = _fresh_db()
+    weave_enrich.store_scout_findings(
+        CID, _research_with_findings(enrichment={"phone": "2019 03 14"}),
+        person_name="Test Person", db_path=path)
+    assert _facts(db, "phone") == [], "a non-number must not reach the record"
+
+
+def test_phone_accumulates_rather_than_superseding():
+    """Multi-valued: a second number never invalidates the first."""
+    path, db = _fresh_db()
+    _seed_fact(db, "phone", "+12025550100")
+    weave_enrich.store_scout_findings(
+        CID, _research_with_findings(enrichment={"phone": "+1 202 555 0143"}),
+        person_name="Test Person", db_path=path)
+    facts = _facts(db, "phone")
+    assert len(facts) == 2, f"both numbers kept, got {len(facts)}"
+    assert all(f["valid_until"] is None for f in facts), "neither superseded"
+
+
+def test_linkedin_url_is_written_as_profile_linkedin():
+    path, db = _fresh_db()
+    weave_enrich.store_scout_findings(
+        CID, _research_with_findings(enrichment={
+            "linkedin_url": "https://www.linkedin.com/in/zephyrine-quintbadger",
+            "linkedin_url_confidence": 0.75}),
+        person_name="Zephyrine Quintbadger", db_path=path)
+    vals = [f["value"] for f in _facts(db, "profile_linkedin")]
+    assert len(vals) == 1 and "zephyrine-quintbadger" in vals[0], vals
+
+
+def test_contact_missing_fields_reads_the_record():
+    have_all = {"id": CID, "email": "a@example.test", "phone": "+12025550143",
+                "location_city": "Springfield, OR",
+                "website": "https://averyplaceholder.test"}
+    missing = weave_enrich.contact_missing_fields(have_all)
+    assert missing == ["linkedin"], missing
+    empty = weave_enrich.contact_missing_fields({"id": CID})
+    assert set(empty) == {"linkedin", "phone", "site", "email", "city"}, empty
+
+
+def test_contact_missing_fields_ignores_a_social_url_as_a_website():
+    # A LinkedIn or Medium URL in the website column is somebody else's
+    # platform, not the contact's own site.
+    c = {"id": CID, "website": "https://www.linkedin.com/in/avery-placeholder"}
+    missing = weave_enrich.contact_missing_fields(c)
+    assert "site" in missing, "a linkedin URL is not a personal site"
+    assert "linkedin" not in missing, "but it does satisfy the linkedin field"
 
 
 if __name__ == "__main__":

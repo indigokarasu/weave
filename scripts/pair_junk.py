@@ -2,7 +2,7 @@
 import os
 """Evaluate org and title TOGETHER, not one at a time.
 
-The two cases Jared named first survive every single-field rule, because each
+The two cases the operator named first survive every single-field rule, because each
 half is individually plausible:
 
     Kim Appelquist   org='Watt'      title='Heriot'      -> 'Heriot-Watt'

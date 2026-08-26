@@ -6,28 +6,28 @@ from employer_gate import corroborate, is_free_mail, tokens, candidates
 
 SUPPORTED = [
     # the ones that were RIGHT and must keep flowing through
-    ("Pictal Health", "katie@pictalhealth.com", (), ()),
-    ("Facebook AI", "bedard@meta.com", (), ()),            # alias: facebook=meta
-    ("Meta", "bedard@meta.com", (), ()),
-    ("Innovaccer", "jared@innovaccer.com", (), ()),
+    ("Example Health", "someone@examplehealth.test", (), ()),
+    ("Facebook AI", "sample.person@meta.example", (), ()),            # alias: facebook=meta
+    ("Meta", "sample.person@meta.example", (), ()),
+    ("Examplecorp", "user@examplecorp.test", (), ()),
     ("Berkeley Lab", "x@lbl.gov", (), ()),                 # alias group
     ("Recurse Center", "", ("https://recurse.com/about",), ()),
     ("Wikimedia Foundation", "", ("https://wikimedia.org/wiki/User:X",), ()),
-    ("Cruise Automation", "", ("https://getcruise.com/team",), ()),
+    ("Exampleauto", "", ("https://exampleauto.test/team",), ()),
 ]
 
 UNSUPPORTED = [
     # the fabrications and the junk
-    ("Heriot-Watt University", "kim@gmail.com", ("https://linkedin.com/in/kima",), ()),
+    ("Heriot-Watt University", "kim@example.com", ("https://linkedin.com/in/kima",), ()),
     ("University at Buffalo", "", (), ()),
-    ("Carnegie Mellon University", "frosty@gmail.com", (), ()),
+    ("Carnegie Mellon University", "frosty@example.com", (), ()),
     ("Saltlaketoastmastersclub", "", (), ()),
     ("Dedham", "", (), ()),
     ("American", "", (), ()),                              # United Airlines' "org"
-    ("Engineering", "shahyar@gmail.com", (), ()),
-    ("Angel Investor / Individual", "samtripodi@me.com", (), ()),
-    ("Independent / Freelance", "jjonesered@gmail.com", (), ()),
-    ("Gauteng Provincial Government", "kathleen@gmail.com", (), ()),
+    ("Engineering", "shahyar@example.com", (), ()),
+    ("Angel Investor / Individual", "mossglade@me.com", (), ()),
+    ("Independent / Freelance", "jjonesered@example.com", (), ()),
+    ("Gauteng Provincial Government", "kathleen@example.com", (), ()),
     # a page anyone can have is not employment
     ("GitHub", "", ("https://github.com/brainwane",), ()),
     ("Google", "", ("https://developers.google.com/profile/u/ankita",), ()),
@@ -49,9 +49,9 @@ for org, em, urls, other in UNSUPPORTED:
 
 assert is_free_mail("gmail.com") and is_free_mail("me.com")
 assert not is_free_mail("meta.com"), "prefix match would eat meta.com"
-assert not is_free_mail("innovaccer.com")
+assert not is_free_mail("examplecorp.test")
 assert tokens("The Design Studio") == []
-assert "pictal" in tokens("Pictal Health")
+assert "example" in tokens("Example Health")
 assert "meta" in candidates("Facebook AI")
 # a short alias must not substring-match: 'lbl' is inside 'quibbler.com'
 assert not corroborate("Berkeley Lab", "x@quibbler.com", (), ())

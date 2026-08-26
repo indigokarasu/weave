@@ -17,7 +17,7 @@ on persons.org must be ALL of:
   2. uncorroborated -- the contact's own email domain, profile URLs and other
      facts say nothing about it.
   3. not the owner's own -- it differs from what Google held before this
-     pipeline started writing, so it is not something Jared typed.
+     pipeline started writing, so it is not something the operator typed.
 
 'Indigotelecomgroup' on Indigo Karasu is the type case: no fact anywhere claims
 it, a gmail address cannot support it, and it is a plain namesake match on the

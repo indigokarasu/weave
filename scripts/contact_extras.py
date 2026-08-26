@@ -271,7 +271,7 @@ def plan(people, con):
                     # Create her as a pseudo contact: a real row that relations
                     # can point at, marked is_pseudo so enrichment never
                     # researches her and she is not mistaken for a contact of
-                    # Jared's own.
+                    # the operator's own.
                     who_clean, who_bday = split_trailing_date(who)
                     if not who_clean:
                         skipped.append((nm, rtype, who, "no usable name after date"))

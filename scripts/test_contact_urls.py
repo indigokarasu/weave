@@ -58,7 +58,7 @@ def test_linkedin_tracking_params_dropped_identity_kept():
 
 
 def test_github_user_vs_reserved():
-    assert classify_url("https://github.com/larkfielding")[0] == "profile_github"
+    assert classify_url("https://github.com/birchmantle")[0] == "profile_github"
     assert classify_url("https://github.com/features")[0] is None
     assert classify_url("https://github.com/features/copilot")[0] is None
 

@@ -514,10 +514,10 @@ def _email_local(email):
 def email_handle_variants(email):
     """Distinctive handle candidates derived from an email's local part.
 
-    'wrenkeeley@fastmail.com' -> ['wrenkeeley']
-    'tomasvega.design@fastmail.com' -> ['tomasvega.design',
-                                       'tomasvegadesign',
-                                       'tomasvega-design']
+    'fernwick@fastmail.com' -> ['fernwick']
+    'cedarquill.design@fastmail.com' -> ['cedarquill.design',
+                                       'cedarquilldesign',
+                                       'cedarquill-design']
     Generic mailboxes and short locals yield [] — probing 'info' or 'jo'
     across platforms only manufactures wrong people.
     """
@@ -990,19 +990,19 @@ _FREE_MAIL_HOSTS = (
 def org_from_email_domain(email, person_name=""):
     """A company name implied by a work email address, or "".
 
-    A corporate address names the employer directly -- abhinav@innovaccer.com is
+    A corporate address names the employer directly -- someone@examplecorp.test is
     Innovaccer -- and that is the single strongest disambiguator available for a
     common name. It was going unused: queries were built only from persons.org,
     so a contact whose org was empty searched with no company at all, and one
     whose org held enrichment junk searched with the WRONG company. Of the
     work-email contacts this pipeline failed on, 32 had an org that disagreed
-    with their own domain (@envoy.com filed under 'Discover', @capitalone.com
-    under 'LF', @angloamerican.com under 'Google').
+    with their own domain (@examplevisitor.test filed under 'Discover', @examplebank.test
+    under 'LF', @examplemining.test under 'Google').
 
     Two kinds of domain must NOT be treated as an employer:
       * free mail -- gmail.com says nothing about anyone.
-      * a vanity domain built from the person's own name -- munrovia.com,
-        frankienicoletti.com, jamesso.ng. Searching "Frankie Nicoletti" AND
+      * a vanity domain built from the person's own name -- vanitydomain.test,
+        personalname.test, vanity.test. Searching "Frankie Placeholder" AND
         "frankienicoletti" just repeats the name and narrows nothing.
     """
     email = (email or "").strip().lower()
@@ -1047,8 +1047,8 @@ def _domain_is_the_person(flat, person_name):
         return True
     if len(parts) == 1 and parts[0] == flat:
         return True
-    # A vanity domain usually EXTENDS a name part: munrovia.com from Munro,
-    # jamesso.ng from James So. Require strictly longer, so that a person named
+    # A vanity domain usually EXTENDS a name part: vanitydomain.test from Munro,
+    # vanity.test from James So. Require strictly longer, so that a person named
     # Ford working at ford.com still resolves to the company.
     for p in parts:
         if len(p) >= 4 and flat.startswith(p) and len(flat) > len(p):
@@ -1059,7 +1059,7 @@ def _domain_is_the_person(flat, person_name):
 def personal_site_from_email(email, person_name="", is_person=True):
     """The contact's OWN website, inferred from a vanity email domain.
 
-    rusty@munrovia.com means munrovia.com is Rusty Munro's site, not his
+    someone@vanitydomain.test means vanitydomain.test is Robin Vanity's site, not his
     employer. Treating that only as "not a company" and discarding it threw away
     the single richest page available for the contact: a personal site carries
     the phone number, the city, the other profile links and often a second email
@@ -1074,7 +1074,7 @@ def personal_site_from_email(email, person_name="", is_person=True):
     # company, so "the domain matches the name" fires for AlphaSights ->
     # alphasights.com and Ramp -> ramp.com, which are corporate sites, not
     # somebody's page. And a contact whose NAME field holds an email address
-    # (katie@pictalhealth.com) makes her employer's domain look like a vanity
+    # (someone@examplehealth.test) makes her employer's domain look like a vanity
     # domain. Neither is a personal site, and treating them as one also
     # suppresses the employer search term they should be getting.
     if not is_person:
@@ -1665,13 +1665,56 @@ def curated_urls_for_contact(contact_id, db_path=None):
         log(f"  scout: could not read curated urls ({str(e)[:60]})")
         return []
 
+def contact_missing_fields(contact, db_path=None):
+    """Which of scout's five target fields this contact still lacks.
+
+    Read off the record the caller already holds, so scout can aim its query
+    budget instead of firing the same battery at everybody. Fail-soft: on any
+    error every field is reported missing, which is the previous behaviour.
+    """
+    get = contact.get if isinstance(contact, dict) else (
+        lambda k, d="": contact[k] if k in contact.keys() else d)
+    have = set()
+    try:
+        if (get("email", "") or "").strip():
+            have.add("email")
+        if (get("phone", "") or "").strip():
+            have.add("phone")
+        if (get("location_city", "") or "").strip():
+            have.add("city")
+        _w = (get("website", "") or "").strip().lower()
+        if _w and not any(h in _w for h in _SOCIAL_HOSTS_FOR_SITE):
+            have.add("site")
+        if "linkedin.com/in" in _w:
+            have.add("linkedin")
+        for _u in curated_urls_for_contact(get("id", "") or "", db_path=db_path):
+            _lu = str(_u).lower()
+            if "linkedin.com/in" in _lu:
+                have.add("linkedin")
+            elif not any(h in _lu for h in _SOCIAL_HOSTS_FOR_SITE):
+                have.add("site")
+    except Exception:  # noqa: BLE001
+        return list(_TARGET_FIELDS)
+    return [f for f in _TARGET_FIELDS if f not in have]
+
+
+_TARGET_FIELDS = ("linkedin", "phone", "site", "email", "city")
+# Hosts that are somebody else's platform, not the contact's own site.
+_SOCIAL_HOSTS_FOR_SITE = (
+    "linkedin.com", "twitter.com", "x.com", "facebook.com", "instagram.com",
+    "github.com", "medium.com", "youtube.com", "pinterest.com", "behance.net",
+    "tiktok.com", "substack.com", "about.me", "angel.co", "calendly.com",
+    "paypal.com", "snapchat.com", "bsky.app", "cargocollective.com",
+)
+
+
 def scout_research_contact(contact, top_sites=300):
     """Run ocas-scout's person-OSINT for one contact and return the full result
     (the intended path; see ocas-scout/references/plans/contact-enrichment.plan.md).
 
     research_person anchors on the contact's distinctive email handle (+phone),
     runs maigret/holehe, and corroborates identity across independent sources —
-    so a common name like 'Tomas Vega' is resolved by the handle, never the
+    so a common name like 'Cedar Quill' is resolved by the handle, never the
     name alone. Returns the full result dict (identity / profiles / findings /
     enrichment / tools), or a minimal error result if scout is unavailable.
     """
@@ -1719,6 +1762,7 @@ def scout_research_contact(contact, top_sites=300):
         known_urls=known_urls,
         name_given=get("name_given", "") or "",
         name_family=get("name_family", "") or "",
+        missing_fields=contact_missing_fields(contact),
     )
 
 
@@ -1842,7 +1886,10 @@ def store_scout_findings(contact_id, res, person_name="", db_path=None,
       - one profile_<platform> = url per corroborated profile
       - each profile bio as bio_summary (the extraction feedstock)
       - each resolved handle as username
-      - holehe account-existence as account_on
+      - phone / email / profile_linkedin when scout sourced them from a page
+        confirmed to be the contact's
+    NOT written: holehe/user_scanner account existence (account_on). See the
+    comment at the former write site for why.
     Every fact carries source_ref (the profile URL) and a confidence tied to
     the identity level. Gated: nothing is written below `min_identity`.
 
@@ -1919,6 +1966,61 @@ def store_scout_findings(contact_id, res, person_name="", db_path=None,
         else:
             _add("email", _em, enr.get("email_source", "scout_osint"), conf)
 
+    # A phone number scout mined off a page confirmed to be the contact's. It
+    # was computed and dropped, exactly as the email was: nothing in this loop
+    # ever looked at the key. Held to the same bar -- scout only sets it from an
+    # explicit telephone assertion (a tel: link or schema.org) on a first-party
+    # page, and refuses when two different numbers were found the same way --
+    # and re-validated here so a malformed value cannot reach the record.
+    _ph = enr.get("phone")
+    if isinstance(_ph, str) and _ph.strip():
+        _ph = _ph.strip()
+        _ok = False
+        try:
+            import phonenumbers as _pn
+            _parsed = _pn.parse(_ph, "US")
+            _ok = _pn.is_valid_number(_parsed)
+            if _ok:
+                _ph = _pn.format_number(_parsed, _pn.PhoneNumberFormat.E164)
+        except Exception:  # noqa: BLE001
+            _ok = False
+        if not _ok:
+            log(f"  refused phone {_ph!r}: not a valid number")
+        else:
+            _add("phone", _ph, enr.get("phone_source", "scout_osint"), conf)
+
+    # The LinkedIn URL scout accepted. It arrives ONLY when an independent tie
+    # was established (see research_person.linkedin_tie) -- the contact
+    # published it themselves, or the indexed result text named both them and
+    # their employer/city -- and only when no second profile competed for the
+    # same contact. A slug that merely resembles the name never reaches here.
+    _lu = enr.get("linkedin_url")
+    if isinstance(_lu, str) and _lu.strip():
+        _lu = _lu.strip()
+        # Put it through the SAME url_quality gate every other profile URL
+        # passes, rather than around it. Two of those checks are LinkedIn
+        # specific and are worth having on top of scout's tie test:
+        # linkedin_slug_is_someone_else() rejects a multi-word slug sharing
+        # nothing with this contact, and slug_names_another_person() rejects a
+        # slug that names a DIFFERENT person in this address book — a namesake
+        # collision scout cannot see, because it only ever looks at one contact.
+        _lu_ok = True
+        try:
+            from url_quality import is_person_profile
+            _lu_ok = is_person_profile(_lu, person_name, "linkedin",
+                                       _contact_names(weave),
+                                       org=res.get("_contact_org") or "",
+                                       email=res.get("_contact_email") or "")
+        except Exception:  # noqa: BLE001
+            pass
+        if not _lu_ok:
+            log(f"  refused linkedin {_lu!r}: url_quality says it is not this "
+                f"contact's profile")
+        else:
+            _add("profile_linkedin", _lu,
+                 enr.get("linkedin_url_source", "scout_osint"),
+                 float(enr.get("linkedin_url_confidence", conf) or conf))
+
     for k in ("org", "location_city", "website", "pronouns"):
         v = enr.get(k)
         if isinstance(v, str) and v.strip():
@@ -1983,15 +2085,13 @@ def store_scout_findings(contact_id, res, person_name="", db_path=None,
         else:
             _add("occupation", _occ, enr.get("occupation_source", "scout_osint"), conf)
 
-    for f in res.get("findings", []):
-        if f.get("finding_id") == "H001":
-            for sr in f.get("source_refs", []):
-                for site in (sr.get("quote", "") or "").split(","):
-                    site = site.strip()
-                    if site and "." in site and " " not in site:
-                        if _is_sensitive_site(site):
-                            continue
-                        _add("account_on", site, "holehe", 0.5)
+    # account_on is NOT written. It was 84% of everything this pipeline
+    # produced (6,510 of the live facts) and it is not contact data: it asserts
+    # that some address is registered on some site, which is the precise signal
+    # that produced false attributions here before -- an account "existing"
+    # says nothing about whose it is. The measurement still happens upstream and
+    # remains available in res["accounts"] as an internal corroboration signal;
+    # it simply must not become a stored fact about a person.
 
     def _insert_fact(predicate, value, source_ref, c):
         c = min(1.0, max(0.0, float(c)))
@@ -2044,7 +2144,8 @@ def store_scout_findings(contact_id, res, person_name="", db_path=None,
     # minimal; website/pronouns arrive via later migrations in production.
     person_columns = {r["name"] for r in weave.execute("PRAGMA table_info(persons)")}
     node_cols = tuple(c for c in ("org", "occupation", "location_city",
-                                  "website", "pronouns") if c in person_columns)
+                                  "website", "pronouns", "phone", "email")
+                      if c in person_columns)
     cur = weave.execute(
         f"SELECT {', '.join(node_cols)} FROM persons WHERE id = ?", (contact_id,)) \
         if node_cols else []
@@ -2071,6 +2172,10 @@ def store_scout_findings(contact_id, res, person_name="", db_path=None,
                 touched.append(col)
         else:
             new_val = (enr.get(col) or "").strip()
+            if col in ("phone", "email"):
+                # Only a value that actually survived the checks above may land
+                # on the visible record; enr may still hold one this run refused.
+                new_val = next((v for pr, v, _sr, _c in multi if pr == col), "")
             if new_val and not existing:
                 if col == "org" and not validate_field("org", new_val, person_name):
                     continue

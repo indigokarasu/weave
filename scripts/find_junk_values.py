@@ -1,5 +1,5 @@
 import os
-"""Locate the values Jared named, wherever they live, and dump the occupation
+"""Locate the values the operator named, wherever they live, and dump the occupation
 values so the junk is visible rather than inferred from shape."""
 import collections
 import json

@@ -56,7 +56,8 @@ MIN_CONFIDENCE = 0.7
 # to lock a contact out after the question itself has improved.
 PIPELINE_VERSION = "2026-08-24.osint-full"
 
-RETRY_FAILED_DAYS = 7       # nothing found: retry weekly (was 30 — too long to
+RETRY_FAILED_DAYS = 1       # first miss: retry tomorrow; doubles per
+RETRY_FAILED_MAX_DAYS = 45  # consecutive miss, capped here       # nothing found: retry weekly (was 30 — too long to
                             # wait for pipeline fixes to reach failed contacts)
 REFRESH_ENRICHED_DAYS = 90  # data found: re-verify quarterly (jobs and cities change)
 
@@ -258,6 +259,24 @@ def recalculate_enrichability_sqlite(weave, contact_id):
 
 # ─── Progress / Stats ───────────────────────────────────────────────────────
 
+def _retry_days_for(consecutive_failures):
+    """How long to wait before retrying a contact that found nothing.
+
+    A flat interval was wrong at both ends. It made a contact who missed ONCE
+    wait a week -- and the web genuinely does change: a new LinkedIn profile, a
+    conference bio or a company team page can appear any day. It also re-asked
+    the same unanswerable question weekly forever for the contacts who have
+    missed a dozen times running; 180 of them have never yielded anything across
+    3,223 logged attempts.
+
+    So the wait doubles with each consecutive miss: 1, 2, 4, 8, 16, 32 days,
+    capped. A fresh failure is retried almost immediately, while a chronic one
+    backs off on its own without ever being written off entirely.
+    """
+    n = max(int(consecutive_failures or 1), 1)
+    return min(2 ** (n - 1), RETRY_FAILED_MAX_DAYS)
+
+
 def load_progress():
     """Map contact id -> (last attempt time, whether fields were written).
 
@@ -266,6 +285,7 @@ def load_progress():
     attempted ones sit out, everyone else gets a turn, and every contact comes
     back around because people's data changes over time."""
     latest = {}
+    _hist = {}
     if os.path.exists(PROGRESS_FILE):
         with open(PROGRESS_FILE) as f:
             for line in f:
@@ -278,8 +298,21 @@ def load_progress():
                         if prev is None or ts > prev[0]:
                             latest[cid] = (ts, bool(rec.get("fields")),
                                            rec.get("pipeline_version", ""))
+                        _hist.setdefault(cid, []).append(
+                            (ts, bool(rec.get("fields"))))
                 except Exception:
                     pass
+    # How many times IN A ROW the most recent attempts failed. A contact that
+    # missed once is a different case from one that has missed eighteen times,
+    # and a single interval cannot serve both.
+    for _cid, _h in _hist.items():
+        _h.sort()
+        _n = 0
+        for _ts, _ok in reversed(_h):
+            if _ok:
+                break
+            _n += 1
+        latest[_cid] = latest[_cid] + (_n,)
     return latest
 
 
@@ -498,7 +531,10 @@ def main():
         # a superseded version is not "already enriched", it is unverified.
         if prev_version != PIPELINE_VERSION:
             return True
-        wait = REFRESH_ENRICHED_DAYS if had_fields else RETRY_FAILED_DAYS
+        if had_fields:
+            wait = REFRESH_ENRICHED_DAYS
+        else:
+            wait = _retry_days_for(prev[3] if len(prev) > 3 else 1)
         return (now - last_ts).days >= wait
 
     # A targeted re-run: only these contacts, by name, one per line. Used when a

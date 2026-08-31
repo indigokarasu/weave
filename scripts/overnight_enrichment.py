@@ -97,10 +97,11 @@ def get_contacts_needing_enrichment():
           AND COALESCE(is_archived, 0) IN (0, '')
           AND COALESCE(is_deceased, 0) IN (0, '')
           -- A company is not a person, and person-OSINT on one produces
-          -- nonsense: 'Chase Bank' was handed a stranger's GitHub account
-          -- (github.com/deontpen6532u123dg) and a CDN asset path as its
-          -- website. The Company tag already marks these; honour it here the
-          -- same way is_pseudo and is_deceased are honoured.
+          -- nonsense: a bank record was handed an unrelated individual's
+          -- GitHub account, their username, and a CDN asset path as its
+          -- website. Cheap pre-filter only -- the rule itself is enforced in
+          -- weave_enrich.scout_research_contact(), which every caller reaches.
+          AND COALESCE(is_company, 0) = 0
           AND id NOT IN (
               SELECT ct.contact_id FROM book_contact_tags ct
               JOIN book_tags t ON t.id = ct.tag_id

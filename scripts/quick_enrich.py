@@ -58,6 +58,22 @@ def run_sherlock(handles):
 
 def quick_enrich(name, org=None, location=None):
     """Run the full Scout → Sift → Sherlock → Write pipeline."""
+    # A COMPANY IS NEVER ENRICHED. This entrypoint takes a bare name from
+    # argv, so nothing upstream has checked the record -- and when the name
+    # matches no contact it CREATES one, which would otherwise mint a company
+    # record and enrich it in a single command. The write functions refuse too,
+    # but refusing here also skips the pointless research sweep.
+    try:
+        from company_gate import is_company as _company_check
+        _is_co, _why = _company_check({"name": name, "name_given": name,
+                                       "name_family": "", "org": org or ""})
+    except Exception:  # noqa: BLE001
+        _is_co, _why = False, ""
+    if _is_co:
+        print("refused: %r is an organisation (%s) -- companies are never "
+              "enriched" % (name, _why))
+        return None
+
     print(f"\n{'='*60}")
     print(f"QUICK ENRICH: {name}")
     if org:

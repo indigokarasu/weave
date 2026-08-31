@@ -1720,6 +1720,33 @@ def scout_research_contact(contact, top_sites=300):
     """
     get = contact.get if isinstance(contact, dict) else (
         lambda k, d="": contact[k] if k in contact.keys() else d)
+
+    # A COMPANY IS NEVER ENRICHED. This is the one place every caller reaches
+    # -- the nightly run, a manual run, a direct call with an explicit id --
+    # so the rule is enforced here rather than in each candidate query, where
+    # any new entrypoint would silently miss it.
+    #
+    # Person-OSINT asks which online accounts belong to the human with this
+    # name. Asked about a business it answers with whichever stranger holds a
+    # matching handle: a bank record was given an unrelated individual's
+    # GitHub account, their username, and a CDN asset path as its homepage.
+    # No answer to that question is correct, so it is not asked.
+    try:
+        from company_gate import is_company as _company_check
+        _is_co, _co_why = _company_check(contact)
+    except Exception as _e:  # noqa: BLE001
+        # Fail CLOSED on a record with no surname: if the gate cannot run, the
+        # shape most likely to be a company is the one refused, not enriched.
+        log(f"  company gate unavailable ({str(_e)[:60]}); refusing on shape")
+        _is_co = not (get("name_family", "") or "").strip()
+        _co_why = "gate unavailable and the record has no surname"
+    if _is_co:
+        log(f"  refused: {get('name', '') or '(unnamed)'} is an organisation "
+            f"({_co_why}) -- companies are never enriched")
+        return {"identity": {"level": "refused",
+                             "reason": "organisation record: %s" % _co_why},
+                "profiles": [], "findings": [], "enrichment": {}, "tools": []}
+
     if SCOUT_SCRIPTS_DIR not in sys.path:
         sys.path.insert(0, SCOUT_SCRIPTS_DIR)
     try:
@@ -1871,6 +1898,58 @@ def _is_job_junk(value, person_name, field):
     return classify(value, person_name, field, _names)
 
 
+# SELECT * rather than a column list: this runs against stores created at
+# different times, and naming a column that a given store predates turns the
+# guard into an exception instead of a refusal.
+_ENRICH_ROW_SQL = "SELECT * FROM persons WHERE id = ?"
+
+
+def _ineligible_for_enrichment(weave, contact_id):
+    """(row, why) -- why is non-empty when nothing may be written about it.
+
+    The candidate query in overnight_enrichment.py already refuses these, but
+    it is not the only way in: quick_enrich takes a bare name from argv, and
+    both write functions below accept a contact id from any caller at all. A
+    rule enforced only in one SELECT is not enforced.
+    """
+    rows = weave.execute(_ENRICH_ROW_SQL, (contact_id,))
+    if not rows:
+        return None, "no such contact"
+    row = rows[0]
+
+    def _f(k):
+        try:
+            v = row[k]
+        except Exception:  # noqa: BLE001
+            return 0
+        try:
+            return int(v or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    if _f("is_pseudo"):
+        return row, "a pseudo record"
+    if _f("is_archived"):
+        return row, "archived"
+    if _f("is_deceased"):
+        return row, "deceased"
+
+    try:
+        from company_gate import is_company as _company_check
+        is_co, why = _company_check(row)
+    except Exception:  # noqa: BLE001
+        # Fail CLOSED: without the gate, refuse the shape most likely to be an
+        # organisation rather than write a stranger's identity onto one.
+        try:
+            fam = (row["name_family"] or "").strip()
+        except Exception:  # noqa: BLE001
+            fam = ""
+        is_co, why = (not fam), "company gate unavailable and no surname"
+    if is_co:
+        return row, "an organisation (%s)" % why
+    return row, ""
+
+
 def store_scout_findings(contact_id, res, person_name="", db_path=None,
                          min_identity="med"):
     """Store ALL of scout's corroborated data for a contact as graph facts.
@@ -1907,7 +1986,10 @@ def store_scout_findings(contact_id, res, person_name="", db_path=None,
     weave = WeaveDB(db_path) if db_path else WeaveDB()
     _ensure_fact_validity_columns(weave)
 
-    if not weave.execute("SELECT id FROM persons WHERE id = ?", (contact_id,)):
+    _row, _no = _ineligible_for_enrichment(weave, contact_id)
+    if _no:
+        if _row is not None:
+            log(f"  refused to store enrichment: contact is {_no}")
         return 0, level, []
 
     conf = 0.75 if level == "high" else 0.6
@@ -2228,8 +2310,10 @@ def enrich_weave_contact(contact_id, enrichment_data, confidence=0.7,
         return False
 
     written = 0
-    rows = weave.execute("SELECT id FROM persons WHERE id = ?", (contact_id,))
-    if not rows:
+    _row, _no = _ineligible_for_enrichment(weave, contact_id)
+    if _no:
+        if _row is not None:
+            log(f"  refused to enrich: contact is {_no}")
         return False
 
     record_time = datetime.now(timezone.utc).isoformat()

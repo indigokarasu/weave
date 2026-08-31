@@ -2017,8 +2017,15 @@ def store_scout_findings(contact_id, res, person_name="", db_path=None,
             log(f"  refused linkedin {_lu!r}: url_quality says it is not this "
                 f"contact's profile")
         else:
+            # Record WHICH tie established this, not just "scout". A
+            # first_party or context tie rests on evidence outside
+            # linkedin.com; a slug tie rests on the slug alone. Consumers
+            # that filter on evidence quality need to tell them apart.
+            _li_tie = (enr.get("linkedin_tie") or "").strip()
+            _li_src = ("scout_linkedin_" + _li_tie) if _li_tie else \
+                enr.get("linkedin_url_source", "scout_osint")
             _add("profile_linkedin", _lu,
-                 enr.get("linkedin_url_source", "scout_osint"),
+                 _li_src,
                  float(enr.get("linkedin_url_confidence", conf) or conf))
 
     for k in ("org", "location_city", "website", "pronouns"):

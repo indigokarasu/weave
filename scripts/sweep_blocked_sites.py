@@ -29,7 +29,7 @@ con = sqlite3.connect(DB)
 con.row_factory = sqlite3.Row
 
 rows = con.execute("""
-SELECT f.id, f.predicate, f.value, f.source_ref, p.name
+SELECT f.id, f.predicate, f.value, f.source_ref, f.source_type, p.name
 FROM facts f
 JOIN edges e ON e.target_id = f.id AND e.rel_type = 'HasFact'
 JOIN persons p ON p.id = e.source_id
@@ -45,8 +45,19 @@ def host_of(s):
     return s.split("/")[0].replace("www.", "")
 
 
+# A fact whose evidence lies OUTSIDE the answers-for-any host is not what this
+# sweep is for. The sweep exists because such a host serves identical text to a
+# fetcher, so "the profile page loaded" proves nothing. That reasoning does not
+# reach a profile tied to the contact by a page they own (first_party) or by
+# indexed result text naming them and their employer (context) -- neither reads
+# the host at all. A slug tie IS the slug resembling a name, which is the
+# namesake failure this pipeline refuses, so it stays sweepable.
+INDEPENDENT_TIE = ("scout_linkedin_first_party", "scout_linkedin_context")
+
 hit = []
 for r in rows:
+    if r["source_type"] in INDEPENDENT_TIE:
+        continue
     h_ref = host_of(r["source_ref"])
     h_val = host_of(r["value"])
     if any(b in h_ref or b in h_val for b in bad_hosts):

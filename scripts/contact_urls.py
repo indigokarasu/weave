@@ -49,6 +49,13 @@ _PLATFORMS = [
     ("dribbble.com", "profile_dribbble"),
     ("youtube.com", "profile_youtube"),
     ("tiktok.com", "profile_tiktok"),
+    # Payment handles. These fell through to "website", so a paypal.me link
+    # became the contact's personal website -- and `website` is a field that
+    # syncs into the real address book. A way to pay someone is not their site.
+    ("paypal.com", "profile_paypal"),
+    ("paypal.me", "profile_paypal"),
+    ("venmo.com", "profile_venmo"),
+    ("cash.app", "profile_cashapp"),
 ]
 
 # Non-profile paths that are site sections, not people.

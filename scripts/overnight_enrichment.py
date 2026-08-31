@@ -96,6 +96,15 @@ def get_contacts_needing_enrichment():
           AND COALESCE(is_pseudo, 0) IN (0, '')
           AND COALESCE(is_archived, 0) IN (0, '')
           AND COALESCE(is_deceased, 0) IN (0, '')
+          -- A company is not a person, and person-OSINT on one produces
+          -- nonsense: 'Chase Bank' was handed a stranger's GitHub account
+          -- (github.com/deontpen6532u123dg) and a CDN asset path as its
+          -- website. The Company tag already marks these; honour it here the
+          -- same way is_pseudo and is_deceased are honoured.
+          AND id NOT IN (
+              SELECT ct.contact_id FROM book_contact_tags ct
+              JOIN book_tags t ON t.id = ct.tag_id
+              WHERE LOWER(t.name) = 'company')
           -- Three filters that hold only in normal operation. With
           -- WEAVE_ENRICH_ALL=1 each is neutralised by the bound flag, because
           -- each one turned out to exclude contacts that DO need the work:

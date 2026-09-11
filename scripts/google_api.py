@@ -3,6 +3,7 @@
 Shared Google API helpers for Weave scripts.
 Import from here instead of duplicating auth + API call logic.
 """
+import http.client
 import json
 import urllib.request
 import urllib.error
@@ -86,7 +87,7 @@ def get_access_token(force_refresh=False):
 
 
 def api_get(url, token, timeout=30, max_retries=4):
-    """GET request to People API with retry on 429."""
+    """GET request to People API with retry on 429 and connection errors."""
     backoff = 5.0
     for attempt in range(1, max_retries + 1):
         req = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}'})
@@ -94,7 +95,16 @@ def api_get(url, token, timeout=30, max_retries=4):
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read())
         except urllib.error.HTTPError as e:
+            # Retry on 429 (rate limit)
             if e.code == 429 and attempt < max_retries:
+                import time
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            raise
+        except (urllib.error.URLError, http.client.RemoteDisconnected) as e:
+            # Retry on connection-level errors (RemoteDisconnected, timeout, etc.)
+            if attempt < max_retries:
                 import time
                 time.sleep(backoff)
                 backoff *= 2

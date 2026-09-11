@@ -19,7 +19,9 @@ person (accent-insensitively). 25 names in this book are held by more than one
 row, and guessing which one would attach a family tie to a stranger. Unresolved
 relations are still recorded, as a fact naming the person.
 """
+import argparse
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -27,7 +29,16 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, f"{_PROF}/skills/ocas-scout/scripts")
+# --help guard: exit before importing sibling modules
+if "--help" in sys.argv or "-h" in sys.argv:
+    print("contact_extras.py — Import Google Contacts birthdays, relations, and events into Weave.")
+    print("Usage: python3 contact_extras.py [--db PATH] [--apply]")
+    sys.exit(0)
+
+_PROF = os.environ.get("HERMES_HOME",
+                       os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo"))
+
+sys.path.insert(0, os.path.join(_PROF, "skills", "ocas-scout", "scripts"))
 from _normalize import fold_accents  # noqa: E402
 
 FACT_SOURCE_TYPE = "google_contacts"
@@ -400,6 +411,3 @@ if __name__ == "__main__":
     print("  pseudo contacts created: %d" % len(creates))
     for _c in creates[:12]:
         print("     %-34s birthday=%s" % (_c[1][:34], _c[2]))
-import os
-_PROF = os.environ.get("HERMES_HOME",
-                       os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo"))

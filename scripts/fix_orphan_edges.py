@@ -24,13 +24,15 @@ import os
 import sqlite3
 from datetime import datetime
 
-SCRIPT = (f"{_PROF}/skills/ocas-weave/scripts/"
-          "recalculate_enrichability.py")
-DB = f"{_PROF}/commons/db/ocas-weave/weave.sqlite"
-AUDIT_DIR = f"{_PROF}/commons/data/ocas-weave"
+_PROF = os.environ.get("HERMES_HOME",
+                       os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo"))
+SCRIPT = (os.path.join(_PROF, "skills", "ocas-weave", "scripts",
+          "recalculate_enrichability.py"))
+DB = os.path.join(_PROF, "commons", "db", "ocas-weave", "weave.sqlite")
+AUDIT_DIR = os.path.join(_PROF, "commons", "data", "ocas-weave")
 
-ap = argparse.ArgumentParser()
-ap.add_argument("--apply", action="store_true")
+ap = argparse.ArgumentParser(description=__doc__)
+ap.add_argument("--apply", action="store_true", help="Apply the fix (dry run by default)")
 a = ap.parse_args()
 
 # ---- 1. the leak
@@ -113,6 +115,3 @@ print("VERIFY live facts unchanged        : %d" % con.execute(
     "SELECT COUNT(*) FROM facts WHERE valid_until IS NULL").fetchone()[0])
 print("VERIFY edges total                 : %d" % con.execute(
     "SELECT COUNT(*) FROM edges").fetchone()[0])
-import os
-_PROF = os.environ.get("HERMES_HOME",
-                       os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo"))

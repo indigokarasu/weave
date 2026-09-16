@@ -8,7 +8,7 @@ includes:
 - scripts/**
 metadata:
   author: Indigo Karasu (indigokarasu)
-  version: "4.3.0"
+  version: "4.4.0"
   hermes:
     category: data-science
     tags:
@@ -101,7 +101,7 @@ Every command that opens the database runs `_ensure_init()` first via `WeaveDB._
 - **weave.upsert.relationship** — Add or update a `Knows` edge. Confirm both Person nodes exist first.
 - **weave.upsert.preference** — Store a provenance-backed preference.
 - **weave.import.csv** — Bulk import contacts via `COPY FROM`. Read `references/import_export.md`.
-- **weave.query** — Query the graph. Modes: `lookup`, `connection`, `serendipity`, `city`, `summarize`, `gift`. Return only stored facts with provenance.
+- **weave.query** — Query the graph. Modes: `lookup`, `connection`, `serendipity`, `city`, `summarize`, `gift`. Supports `format: "concise"` (default — returns name, org, relationship category; saves ~70% token for identity disambiguation) or `format: "detailed"` (all fields with provenance). Return only stored facts with provenance.
 - **weave.attach** — Query an external skill database read-only.
 - **weave.export** — Export data via `COPY TO`.
 - **weave.sync.google-contacts** — Bidirectional Google Contacts sync. Read `references/connectors.md`.

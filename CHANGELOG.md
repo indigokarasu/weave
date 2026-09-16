@@ -1,3 +1,8 @@
+## [4.4.0] - 2026-09-16
+
+### Added
+- `--format=concise|detailed` support for `weave.query` — concise mode (default) returns name, org, relationship category for ~70% token savings during sift/scout identity disambiguation queries
+
 ## [3.3.1] - 2026-04-26
 
 ### Removed

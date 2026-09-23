@@ -64,7 +64,7 @@
 ### Added
 - Structured entity observations in journal payloads (`entities_observed`, `relationships_observed`, `preferences_observed`)
 - `user_relevance` tagging on journal observations and optional signal emission (default `user` for social graph entities)
-- Elephas journal cooperation in skill cooperation section
+- Chronicle journal cooperation in skill cooperation section
 
 ## 2.3.2
 

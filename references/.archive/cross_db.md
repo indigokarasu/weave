@@ -43,7 +43,7 @@ def query_external_db(skill_name: str, cypher: str, params: dict = None):
 
 ## Known OCAS skill databases
 
-ocas-elephas -- `{agent_root}/commons/db/ocas-elephas/chronicle.lbug` -- entity knowledge graph, maintained by Elephas
+chronicle -- `{agent_root}/commons/db/chronicle/chronicle.lbug` -- entity knowledge graph, maintained by Chronicle
 ocas-triage -- `{agent_root}/commons/db/ocas-triage/triage.lbug` -- task graph and priority queues
 ocas-scout -- `{agent_root}/commons/db/ocas-scout/scout.lbug` -- OSINT research findings
 
@@ -55,7 +55,7 @@ Chronicle may store a `weave:person_id` identifier on Entity nodes for people th
 
 ```python
 rows = query_external_db(
-    "ocas-elephas",
+    "chronicle",
     """
     MATCH (e:Entity)
     WHERE e.type = 'Person' AND lower(e.name) CONTAINS lower($name)

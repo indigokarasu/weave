@@ -3,11 +3,19 @@
 adversarial review reproduced: fragment stripping, and duplicate facts under
 concurrent writers. No network; temp DBs only."""
 import os
+import argparse
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import textwrap
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run contact_urls regression tests")
+    parser.add_argument("--help", action="help", help="show this help message and exit")
+    args = parser.parse_args()
+
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from contact_urls import classify_url, extract_signals, import_all, store_signals, _connect

@@ -68,13 +68,6 @@ from weave_enrich import (
     has_sufficient_anchors,
 )
 
-_HELP_ARGS = {"--help", "-h"}
-if set(sys.argv[1:]) & _HELP_ARGS:
-    print((__doc__ or "").strip() or "Usage: python3 overnight_enrichment.py")
-    sys.exit(0)
-
-
-
 # ─── Weave I/O ──────────────────────────────────────────────────────────────
 
 def get_contacts_needing_enrichment():
@@ -499,6 +492,12 @@ def acquire_pipeline_lock():
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(
+        description='Run overnight enrichment for Weave contacts with gaps.'
+    )
+    args = parser.parse_args()
+
     _lock = acquire_pipeline_lock()
     if _lock is None:
         log("Another enrichment run holds the lock; exiting rather than "

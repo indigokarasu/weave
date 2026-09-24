@@ -8,10 +8,18 @@ valid. Multi-valued predicates (phone, email, profiles) accumulate, all valid.
 Runs entirely on throwaway SQLite DBs — production is never touched.
 """
 import os
+import argparse
 import sys
 import sqlite3
 import tempfile
 import uuid
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run temporal validity model tests")
+    parser.add_argument("--help", action="help", help="show this help message and exit")
+    args = parser.parse_args()
+
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIX = os.environ.get("WEAVE_ENRICH_DIR", HERE)

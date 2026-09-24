@@ -12,12 +12,6 @@ import sys
 from pathlib import Path
 from datetime import datetime, timezone
 
-_HELP_ARGS = {"--help", "-h"}
-if set(sys.argv[1:]) & _HELP_ARGS:
-    print((__doc__ or "").strip() or "Usage: python3 enrichment_control.py")
-    sys.exit(0)
-
-
 AGENT_ROOT = Path(os.environ.get("AGENT_ROOT", Path.home() / ".hermes"))
 PROGRESS_FILE = AGENT_ROOT / "data/weave-enrichment/progress.jsonl"
 STATS_FILE = AGENT_ROOT / "data/weave-enrichment/stats.json"
@@ -75,6 +69,12 @@ def status():
         return True
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(
+        description='Control Weave enrichment pipeline operations (status, start, stop, reset).'
+    )
+    args = parser.parse_args()
+
     if len(sys.argv) < 2:
         print("Usage: enrichment_control.py <status|start|stop>")
         sys.exit(1)

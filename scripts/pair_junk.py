@@ -96,6 +96,14 @@ def evaluate_pair(org, title, contact_name, is_person):
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(
+        description='Detect org/occupation pairs that look like one split string.'
+    )
+    parser.add_argument("--db-path", default=None,
+                        help="Path to weave.sqlite (default: canonical indigo commons path)")
+    args = parser.parse_args()
+
     con = sqlite3.connect(
         os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
     con.row_factory = sqlite3.Row

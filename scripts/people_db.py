@@ -13,12 +13,7 @@ Schema (people.db):
 """
 import sqlite3, uuid, os
 from datetime import datetime, timezone
-import sys
-
-_HELP_ARGS = {"--help", "-h"}
-if set(sys.argv[1:]) & _HELP_ARGS:
-    print((__doc__ or "").strip() or "Usage: python3 people_db.py")
-    sys.exit(0)
+import os
 
 
 DEFAULT_DB = "<hermes-home>/profiles/<profile>/commons/db/people/people.db"

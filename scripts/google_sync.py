@@ -31,11 +31,6 @@ CONFIG_PATH = AGENT_ROOT / "commons/data/ocas-weave/config.json"
 sys.path.insert(0, str(Path(__file__).parent))
 from google_api import get_access_token, api_get as _api_get, api_post as _api_post, api_patch as _api_patch, PEOPLE_API_BASE
 
-_HELP_ARGS = {"--help", "-h"}
-if set(sys.argv[1:]) & _HELP_ARGS:
-    print((__doc__ or "").strip() or "Usage: python3 google_sync.py")
-    sys.exit(0)
-
 
 
 # When a caller wants the outbound log as data rather than on stdout (the
@@ -1613,16 +1608,19 @@ def push_person(person_id, token=None):
 
 
 def main():
-    _argv = sys.argv[1:]
-    if "--push-person" in _argv:
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Bidirectional Google Contacts sync for Weave (SQLite backend)."
+    )
+    parser.add_argument("--push-person", help="Targeted outbound push for one weave person id")
+    parser.add_argument("--dry-run", action="store_true", help="Preview changes without writing")
+    args = parser.parse_args()
+
+    if args.push_person:
         # Targeted outbound for one weave person id. No inbound, no creates, and
         # last_sync is deliberately NOT advanced -- this pass did not read Google,
         # so it must not claim to have.
-        _i = _argv.index("--push-person")
-        if _i + 1 >= len(_argv):
-            print("usage: google_sync.py --push-person <weave_person_id>")
-            sys.exit(2)
-        _pid = _argv[_i + 1]
+        _pid = args.push_person
         _tok = get_access_token()
         _log("Targeted outbound push for person %s" % _pid)
         _res = sync_outbound(_tok, EPOCH_TS, only_person_ids=[_pid])

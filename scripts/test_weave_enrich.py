@@ -8,8 +8,16 @@ buttons, citations, unrelated emails, wrong-person pages.
 
 Run: pytest test_weave_enrich.py -v    (or)    python3 test_weave_enrich.py
 """
+import argparse
 import sys
 from pathlib import Path
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run weave_enrich adversarial tests")
+    parser.add_argument("--help", action="help", help="show this help message and exit")
+    args = parser.parse_args()
+
 
 sys.path.insert(0, str(Path(__file__).parent))
 

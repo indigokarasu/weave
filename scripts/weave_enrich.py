@@ -33,11 +33,6 @@ from zoneinfo import ZoneInfo
 
 from employer_gate import corroborate as _corroborate_employer
 
-_HELP_ARGS = {"--help", "-h"}
-if set(sys.argv[1:]) & _HELP_ARGS:
-    print((__doc__ or "").strip() or "Usage: python3 weave_enrich.py")
-    sys.exit(0)
-
 
 PROFILE = os.environ.get("HERMES_PROFILE", "indigo")
 _PROF = os.environ.get("HERMES_HOME",

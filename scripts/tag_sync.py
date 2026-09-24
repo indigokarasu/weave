@@ -44,7 +44,6 @@ import uuid
 import zlib
 from datetime import datetime, timezone
 
-_HELP = {"--help", "-h"}
 
 SCRIPTS = f"{_PROF}/skills/ocas-weave/scripts"
 if SCRIPTS not in sys.path:
@@ -462,10 +461,6 @@ def main():
     conn.close()
     print("\nAPPLIED: %d weave membership rows, %d google memberships." % (n_w, n_g))
 
-
-if set(sys.argv[1:]) & _HELP and len(sys.argv) == 2:
-    print((__doc__ or "").strip())
-    sys.exit(0)
 
 if __name__ == "__main__":
     main()

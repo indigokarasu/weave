@@ -23,13 +23,6 @@ os.makedirs(LOG_DIR, exist_ok=True)
 sys.path.insert(0, str(Path(__file__).parent))
 from google_api import get_access_token, PEOPLE_API_BASE
 
-_HELP_ARGS = {"--help", "-h"}
-if set(sys.argv[1:]) & _HELP_ARGS:
-    print((__doc__ or "").strip() or "Usage: python3 weave_full_sync.py")
-    sys.exit(0)
-
-
-
 def api_request(method, path, data=None, token=None):
     url = f"{PEOPLE_API_BASE}/{path}"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -174,6 +167,12 @@ def build_update_body(person, facts, spouse):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(
+        description='Run full Weave sync across all configured connectors.'
+    )
+    args = parser.parse_args()
+
     token = get_access_token()
     print("Fetching Weave data...")
     persons, facts_by_rn, spouses_by_rn = get_people()

@@ -61,4 +61,12 @@ def main():
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(
+        description='Weave discovery-source probe. Tests which Scout sources (SearXNG, DDG, web_search, LinkedIn MCP) are usable.'
+    )
+    parser.add_argument("--db-path", default=None,
+                        help="Path to weave.sqlite (default: canonical indigo commons path)")
+    args = parser.parse_args()
+
     main()

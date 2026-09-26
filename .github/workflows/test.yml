@@ -20,6 +20,11 @@ jobs:
       # parse + phantom-reference scan). It must stay runnable without the
       # Google API, the production database, or a sibling skill installed --
       # otherwise it stops being a gate and becomes a local ritual.
+      # PyYAML is the one exception: SKILL.md ships YAML frontmatter, so
+      # proving that frontmatter parses is the point of the test.
+      - name: Install test dependencies
+        run: python3 -m pip install --upgrade -r tests/requirements.txt
+
       - name: Run invariant tests
         run: python3 -m unittest discover -s tests -v
 

@@ -9,10 +9,37 @@ google, and in every stored fact. A future change that folds on a write path fai
 here rather than quietly flattening 19 people's names.
 """
 import sys, sqlite3, unicodedata
-sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-scout/scripts"))
-sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
-from _normalize import fold_accents, normalize_name
-from research_person import _name_phrase_in_text, _name_agreement
+if "--help" in sys.argv or "-h" in sys.argv:
+    print("test_diacritics.py — Diacritics fold for MATCHING only; the contact's real "
+          "spelling must survive in weave, in the Google payload, and in every fact.")
+    print("Usage: python3 test_diacritics.py [--help]")
+    print("Read-only against the production DB; exit 1 on any FAIL line.")
+    sys.exit(0)
+_PROF = os.environ.get("HERMES_HOME",
+                       os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo"))
+
+
+def _load_scout_helpers():
+    """Import Scout's _normalize/research_person on demand.
+
+    Deferred past the --help guard AND into a function body: a module-scope
+    import of a sibling skill's module makes --help fail on any machine where
+    that skill is absent, which is the failure this indirection removes.
+    """
+    sys.path.insert(0, os.path.join(_PROF, "skills", "ocas-scout", "scripts"))
+    sys.path.insert(0, os.path.join(_PROF, "skills", "ocas-weave", "scripts"))
+    try:
+        from _normalize import fold_accents, normalize_name
+        from research_person import _name_phrase_in_text, _name_agreement
+    except ImportError as _e:  # noqa: BLE001
+        print("cannot import Scout's _normalize/research_person: %s" % _e, file=sys.stderr)
+        print("this test needs $HERMES_HOME/skills/ocas-scout/scripts on the path",
+              file=sys.stderr)
+        sys.exit(2)
+    return fold_accents, normalize_name, _name_phrase_in_text, _name_agreement
+
+
+fold_accents, normalize_name, _name_phrase_in_text, _name_agreement = _load_scout_helpers()
 
 DB = os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite")
 fails = 0

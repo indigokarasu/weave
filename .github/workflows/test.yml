@@ -1,0 +1,45 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  invariants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The unit suite is dependency-free on purpose: URL canonicalization,
+      # the polymorphic edges contract, and package integrity (frontmatter
+      # parse + phantom-reference scan). It must stay runnable without the
+      # Google API, the production database, or a sibling skill installed --
+      # otherwise it stops being a gate and becomes a local ritual.
+      - name: Run invariant tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Frontmatter parses
+        run: |
+          python3 -c "
+          import yaml
+          fm = yaml.safe_load(open('SKILL.md').read().split('---')[1])
+          assert fm['name'] == 'ocas-weave', fm['name']
+          assert 'category' in fm['metadata']['hermes']
+          print('frontmatter OK')
+          "
+
+      - name: Every script answers --help
+        run: |
+          failed=0
+          for f in scripts/*.py; do
+            if ! timeout 25 python3 "$f" --help >/dev/null 2>&1; then
+              echo "::error::$f --help exited non-zero"
+              failed=1
+            fi
+          done
+          exit $failed

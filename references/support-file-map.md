@@ -1,6 +1,64 @@
 # Support File Index
 
-One line per bundled file that SKILL.md does not cover inline. Read entries relevant to your task before assuming a file or tool does not exist.
+**Read this before assuming a file or tool does not exist.** Two tables: the
+ones you will actually reach for, and the long tail of one-off repair/audit
+helpers.
+
+## Reach for these first
+
+| File | When to read |
+|------|-------------|
+| `references/schemas.md` | Before any DDL, upsert, or import — Python usage pattern and schema |
+| `references/gotchas-weave.md` | Before any Weave operation — full gotcha catalog |
+| `references/pitfalls-weave.md` | When debugging enrichment failures, data quality issues, or migration residuals — 50+ pitfalls covering all subsystems |
+| `references/query_patterns.md` | Before any weave.query call — SQL templates for all modes |
+| `references/connectors.md` | Before any Google/Clay sync |
+| `references/sqlite-backend-research.md` | Storage backend details, migration notes, SQLite schema |
+| `references/enrichment-pipeline.md` | Overnight enrichment architecture, SearXNG retry pattern |
+| `references/enrichment-write-pattern.md` | **Exact SQLite write pattern for agent-driven enrichment** — three-step (persons UPDATE → facts INSERT → edges INSERT), cron-mode terminal usage, read-back verification |
+| `references/cron-pipeline-runbook.md` | **The correct step-by-step runbook for agent-driven enrichment** — modern pipeline (no LadybugDB bridge, no enrichment_data.py), cron-mode terminal usage, confidence scoring guide, read-back verification pattern |
+| `references/constraints.md` | Full constraint set |
+| `references/config-defaults.md` | Before reading `config.json` or changing a default — default config structure and precedence |
+| `references/self-update.md` | When the skill is stale, or after any fleet update — the retired `weave.update`, where the centralized updater lives, and the two silent failure modes (broken frontmatter, phantom refs) |
+| `references/cron-mode-notes.md` | **When running under cron** — stale-runbook override table, agent-driven enrichment checklist, schema reminder, `execute_code`-blocked constraint |
+| `references/okrs.md` | When asked whether enrichment quality is on target — OKR definitions and thresholds |
+| `references/init_pattern.md` | On first invocation or when the DB fails to auto-init — `_ensure_init()` pattern |
+| `references/import_export.md` | Before any `weave.import.csv` or `weave.export` — `COPY FROM`/`COPY TO` patterns |
+| `references/database_maintenance.md` | Before any destructive repair, purge, or merge — audit, repair, and rollback procedures |
+| `references/graph-storage-backend-research.md` | When revisiting the storage backend — evaluation of alternatives to LadybugDB, why SQLite adjacency lists won |
+| `references/enrichment-data-quality.md` | When enrichment output looks wrong — data quality patterns, garbage categories, validation rules, SearXNG reliability |
+| `references/unresolvable-contacts.md` | **Unresolvable contacts protocol** — when to skip (common name, no disambiguator, multiple conflicting profiles), identity resolution ladder, confidence thresholds, log format |
+| `references/enrichment-operations.md` | When enriching a specific contact by hand, or hitting a sync/merge problem — manual pipeline, Google match rules, constraints, gotcha catalog |
+| `references/enrichment-pipeline-execution.md` | **Before starting an enrichment run** — pre-flight checklist (inbound sync, SearXNG health, discovery probe, junk sweep, stale-DB removal, edges FK) and per-direction I/O examples |
+| `references/error-handling.md` | When something failed — failure → symptom → handling table, the three costliest failures, and the destructive-operation rule |
+| `references/recovery-weave.md` | When a sync or writeback half-completed — the recovery contract |
+| `references/discovery-fallback.md` | **When Scout sources are degraded/unavailable** — SearXNG backoff pattern, DuckDuckGo HTML scrape recipe, page-fetch options, and the no-fabrication defer path. Read before any enrichment run where web_search/SearXNG/LinkedIn MCP are suspect. |
+| `references/support-file-map.md` | When you need a script not listed here — per-script one-line index of the ~70 repair/audit helpers |
+| `references/.archive/` | Never — retired material kept for history; do not follow pointers into it |
+| `scripts/weave_sqlite.py` | SQLite backend module — import `WeaveDB` from here |
+| `scripts/google_api.py` | Shared Google OAuth + API helpers — import `get_access_token`, `api_get`, `api_post`, `api_patch`, `PEOPLE_API_BASE` from here. All scripts that talk to Google APIs should use this module, not duplicate auth logic. |
+| `scripts/weave_enrich.py` | Shared enrichment extraction, search, and validation. Contains `searxng_search`, `fetch_page`, `extract_from_content`, `validate_field`, `is_auth_walled`, `build_scout_queries`. Used by both `quick_enrich.py` and `overnight_enrichment.py` — do not duplicate this logic in individual scripts. |
+| `scripts/quick_enrich.py` | For a single high-value contact interactively (`--help` for flags); the batch equivalent is `overnight_enrichment.py` |
+| `scripts/overnight_enrichment.py` | For a scheduled batch enrichment run — reads `WEAVE_BATCH_SIZE`, `WEAVE_DEADLINE_HOUR_ET`, and the cooldown gates |
+| `scripts/google_sync.py` | **The only sanctioned Google sync path.** Requires `AGENT_ROOT` + `HOME`; exits 2 on a revoked token. Never hand-roll a second sync. |
+| `scripts/dryall.py` | **Before any `google_sync --apply`** — read-only payload dry-run; reports field coverage and anomalies, exits 1 if any found |
+| `scripts/merge_persons.py` | When two `persons` rows are one human — requires corroborating identifiers, never a name match |
+| `scripts/verify_integrity.py` | After any repair/merge/purge — knows which table each edge type points at |
+| `scripts/people_db.py` | Before reading the Choice-2 People database — the access layer and its invariants |
+| `scripts/people_to_google.py` | Before changing outbound payload shape — person → clean Google contact-card mapping |
+| `scripts/audit_quality.py` | When a whole-sweep quality review is needed — many defect classes in one pass |
+| `scripts/test_weave_enrich.py` | After changing `weave_enrich.py` — adversarial tests, every fixture a real observed failure |
+| `scripts/test_temporal.py` | After changing temporal/supersede logic — run on throwaway DBs, `-k` to filter; production never touched |
+| `scripts/test_company_gate.py` / `test_employer_gate.py` / `test_contact_urls.py` / `test_diacritics.py` | After changing the corresponding gate or URL logic — each encodes a real regression |
+| `scripts/README.md` | Before choosing or running any script — CLI-vs-library map, usage conventions, and dry-run/destructive-operation rules |
+| `scripts/discovery_probe.py` | Run at pipeline start to test which discovery sources are live (SearXNG, DDG, notes on web_search/LinkedIn MCP). Decides proceed / fall back / defer. |
+| `scripts/restore_google_urls.py` | When a URL purge over-rejected — dry-run by default, `--apply` to merge the URLs back |
+
+## One-off repair and audit helpers
+
+One line per bundled script that is not in the table above. These are
+single-purpose tools from specific repair sessions; read the line to decide
+whether one applies, then run it with `--help`.
 
 | File | Notes |
 |------|-------|

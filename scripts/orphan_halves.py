@@ -16,8 +16,29 @@ import re
 import sqlite3
 import sys
 
+if "--help" in sys.argv or "-h" in sys.argv:
+    print("orphan_halves.py — Find orgs left orphaned when their paired title was "
+          "cleared as junk (bare single-word org with no company-ness).")
+    print("Usage: python3 orphan_halves.py [--help]")
+    print("Read-only: reports candidates, writes nothing.")
+    sys.exit(0)
+
 sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
-from pair_junk import COMPANY_HINT
+
+
+def _company_hint():
+    """Lazily import pair_junk's COMPANY_HINT regex.
+
+    pair_junk pulls in a four-module chain (job_junk_v3, sweep_field_placement,
+    google_sync, google_api) for a single pattern. Importing it inside the
+    function keeps `--help` and this read-only report working on a tree where
+    that chain is broken or a dependency is missing.
+    """
+    from pair_junk import COMPANY_HINT
+    return COMPANY_HINT
+
+
+COMPANY_HINT = _company_hint()
 
 con = sqlite3.connect(os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "commons/db/ocas-weave/weave.sqlite"))
 con.row_factory = sqlite3.Row

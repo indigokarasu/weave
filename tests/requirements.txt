@@ -1,0 +1,12 @@
+# Test-only dependencies for tests/test_weave_invariants.py.
+#
+# The suite is otherwise dependency-free on purpose: URL canonicalization, the
+# polymorphic edges contract, and package integrity (frontmatter parse +
+# phantom-reference scan) must stay runnable without the Google API, the
+# production database, or a sibling skill installed -- otherwise the test job
+# stops being a gate and becomes a local ritual.
+#
+# PyYAML is the single exception: SKILL.md is a YAML-frontmatter package, so
+# proving the frontmatter parses is the whole point of that test. A hand-rolled
+# parser would only prove the hand-rolled parser works.
+PyYAML>=6.0

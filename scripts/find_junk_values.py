@@ -9,6 +9,14 @@ import sys
 import urllib.parse
 import urllib.request
 
+if "--help" in sys.argv or "-h" in sys.argv:
+    # The work below happens at import time (database and cache files), so
+    # --help has to be answered before any of it runs. Without this the CI
+    # step "Every script answers --help" cannot invoke this script outside a
+    # live Weave install.
+    print((__doc__ or "").strip() or "No arguments: this script works on the Weave database in place.")
+    sys.exit(0)
+
 sys.path.insert(0, os.path.join(os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo")), "skills/ocas-weave/scripts"))
 import google_sync as G
 

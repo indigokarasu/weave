@@ -38,8 +38,18 @@ if "--help" in sys.argv or "-h" in sys.argv:
 _PROF = os.environ.get("HERMES_HOME",
                        os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo"))
 
-sys.path.insert(0, os.path.join(_PROF, "skills", "ocas-scout", "scripts"))
-from _normalize import fold_accents  # noqa: E402
+
+def _fold_accents(s):
+    """Lazy import of Scout's _normalize.
+
+    Deferred so `--help` and argument errors work on a machine where
+    ocas-scout is not installed. The import is one line and its absence
+    should be a clear runtime error, not a crash before argument parsing.
+    """
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(_PROF, "skills", "ocas-scout", "scripts"))
+    from _normalize import fold_accents as _fa
+    return _fa(s)
 
 FACT_SOURCE_TYPE = "google_contacts"
 FACT_CONFIDENCE = 0.95
@@ -157,7 +167,7 @@ def clean_related_name(raw):
 
 
 def _norm_name(s):
-    return re.sub(r"\s+", " ", fold_accents(s or "").strip()).lower()
+    return re.sub(r"\s+", " ", _fold_accents(s or "").strip()).lower()
 
 
 def _ends(s):

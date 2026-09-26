@@ -15,10 +15,13 @@ import tempfile
 import uuid
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Run temporal validity model tests")
-    parser.add_argument("--help", action="help", help="show this help message and exit")
-    args = parser.parse_args()
+parser = argparse.ArgumentParser(
+    prog="test_temporal.py",
+    description="Run temporal-validity model tests (throwaway SQLite DBs; production untouched).",
+)
+parser.add_argument("-k", "--filter", default=None,
+                    help="only run tests whose name contains this substring (default: all)")
+args = parser.parse_args()
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -303,6 +306,10 @@ def test_contact_missing_fields_ignores_a_social_url_as_a_website():
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]
+    if args.filter:
+        tests = [(n, f) for n, f in tests if args.filter in n]
+    if not tests:
+        parser.error(f"no test matches --filter {args.filter!r}")
     failed = 0
     for n, f in tests:
         try:

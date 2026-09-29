@@ -1,23 +1,20 @@
 name: Repository discoverability bootstrap
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
+    paths:
+      - .github/workflows/discoverability-bootstrap.yml
 permissions:
   contents: write
   issues: write
 
 jobs:
-  metadata:
+  discoverability:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
     steps:
-      - name: Repository description and topics
-        run: |
-          gh api --method PATCH "repos/$REPO" -f description='Weave: private social graph — provenance-backed contacts, relationships, preferences, and shared experiences.'
-          gh api --method PUT "repos/$REPO/topics" -H "Accept: application/vnd.github+json" -F 'names[]=agent-skills' -F 'names[]=ai-agent' -F 'names[]=claude' -F 'names[]=contacts' -F 'names[]=crm' -F 'names[]=ocas' -F 'names[]=openclaw' -F 'names[]=relationships' -F 'names[]=social-graph'
-
       - name: Standard labels
         continue-on-error: true
         run: |

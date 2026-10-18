@@ -67,7 +67,10 @@ from weave_enrich import (
     log, scout_research_contact, store_scout_findings,
     has_sufficient_anchors,
 )
-import profile_pic
+try:
+    import profile_pic
+except ImportError:
+    profile_pic = None
 
 # ─── Weave I/O ──────────────────────────────────────────────────────────────
 
@@ -676,7 +679,10 @@ def main():
                         'avatar_url': avatar_url,
                         'urls': urls,
                     }
-                    pic_url, score = profile_pic.enrich_profile_pic(contact_for_pic, mode=pic_mode)
+                    if profile_pic is not None:
+                        pic_url, score = profile_pic.enrich_profile_pic(contact_for_pic, mode=pic_mode)
+                    else:
+                        pic_url, score = None, 0.0
                     if pic_url:
                         log(f"  [pic] updated avatar for {name} (score {score:.2f})")
                         # Push the photo to Google Contacts
@@ -685,7 +691,10 @@ def main():
                             res = weave.execute("SELECT google_resource_name FROM persons WHERE id = ?", (contact_id,))
                             rn = res[0]['google_resource_name'] if res else None
                             if rn:
-                                img = profile_pic.fetch_image_bytes(pic_url)
+                                if profile_pic is not None:
+                                    img = profile_pic.fetch_image_bytes(pic_url)
+                                else:
+                                    img = None
                                 if img:
                                     photo_res = update_contact_photo(rn, img)
                                     if 'error' in photo_res:

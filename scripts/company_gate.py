@@ -1,3 +1,7 @@
+import sys as _sys
+if '--help' in _sys.argv or '-h' in _sys.argv:
+    print('Usage: ' + __file__ + ' [--help]')
+    _sys.exit(0)
 #!/usr/bin/env python3
 """Decide whether a contact record is an organisation rather than a person.
 

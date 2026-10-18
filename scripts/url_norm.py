@@ -1,3 +1,7 @@
+import sys as _sys
+if '--help' in _sys.argv or '-h' in _sys.argv:
+    print('Usage: ' + __file__ + ' [--help]')
+    _sys.exit(0)
 """One canonical form for a contact URL, used by every path that reads or writes one.
 
 There were two: the inbound importer canonicalised (https, no www, no trailing

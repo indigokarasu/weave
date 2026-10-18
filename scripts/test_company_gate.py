@@ -1,3 +1,7 @@
+import sys as _sys
+if '--help' in _sys.argv or '-h' in _sys.argv:
+    print('Usage: ' + __file__ + ' [--help]')
+    _sys.exit(0)
 #!/usr/bin/env python3
 """company_gate: a company is never sent to person-OSINT, a person always is.
 

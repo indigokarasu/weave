@@ -228,18 +228,24 @@ def has_sufficient_anchors(person):
     return True, "ok"
 
 
-def searxng_search(query, limit=5, searxng_url=None, retries=2):
+def searxng_search(query, limit=5, searxng_url=None, retries=2, engines=None):
     """Search via local SearXNG. Returns list of {url, title, content}.
 
     Retries transient failures with backoff — the local SearXNG container
     drops connections (and occasionally restarts) under bursty query load.
     Raises on final failure so callers can distinguish "search infrastructure
     down" from "no results found".
+
+    engines: optional comma-separated list of engine names to use. If not
+    provided, uses a curated set of free engines known to work well for
+    people search (bing, google, brave, qwant, yahoo, naver, seznam).
     """
+    if engines is None:
+        engines = "bing,google,brave,qwant,yahoo,naver,seznam"
     base = (searxng_url or SEARXNG_URL).rstrip("/")
     if not base.endswith("/search"):
         base = base + "/search"
-    params = urllib.parse.urlencode({"q": query, "format": "json", "limit": limit})
+    params = urllib.parse.urlencode({"q": query, "format": "json", "limit": limit, "engines": engines})
     url = f"{base}?{params}"
     last_err = None
     for attempt in range(retries + 1):
@@ -260,14 +266,33 @@ def searxng_search(query, limit=5, searxng_url=None, retries=2):
 
 def fetch_page(url):
     """
-    Fetch a page via direct HTTP, falling back to Jina Reader.
+    Fetch a page via direct HTTP, falling back to free extraction services.
     Returns (text_content, method) or (None, None).
     """
-    # Try direct HTTP
+    # Try direct HTTP with multiple user agents
+    user_agents = [
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    ]
+    for ua in user_agents:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": ua})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                html = resp.read().decode("utf-8", errors="ignore")
+            text = re.sub(r'<script[^>]*>.*?</script>', ' ', html, flags=re.DOTALL)
+            text = re.sub(r'<style[^>]*>.*?</style>', ' ', text, flags=re.DOTALL)
+            text = re.sub(r'<[^>]+>', ' ', text)
+            text = re.sub(r'\s+', ' ', text).strip()
+            if len(text) >= 200:
+                return text[:5000], "direct_http"
+        except Exception:
+            pass
+
+    # Fallback: Google cache (free)
     try:
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        })
+        cache_url = f"https://webcache.googleusercontent.com/search?q=cache:{urllib.parse.quote(url, safe='')}"
+        req = urllib.request.Request(cache_url, headers={"User-Agent": user_agents[0]})
         with urllib.request.urlopen(req, timeout=10) as resp:
             html = resp.read().decode("utf-8", errors="ignore")
         text = re.sub(r'<script[^>]*>.*?</script>', ' ', html, flags=re.DOTALL)
@@ -275,7 +300,22 @@ def fetch_page(url):
         text = re.sub(r'<[^>]+>', ' ', text)
         text = re.sub(r'\s+', ' ', text).strip()
         if len(text) >= 200:
-            return text[:5000], "direct_http"
+            return text[:5000], "google_cache"
+    except Exception:
+        pass
+
+    # Fallback: Wayback Machine (free)
+    try:
+        wayback_url = f"https://web.archive.org/web/2024/{url}"
+        req = urllib.request.Request(wayback_url, headers={"User-Agent": user_agents[0]})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+        text = re.sub(r'<script[^>]*>.*?</script>', ' ', html, flags=re.DOTALL)
+        text = re.sub(r'<style[^>]*>.*?</style>', ' ', text, flags=re.DOTALL)
+        text = re.sub(r'<[^>]+>', ' ', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        if len(text) >= 200:
+            return text[:5000], "wayback"
     except Exception:
         pass
 

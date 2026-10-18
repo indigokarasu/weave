@@ -1,3 +1,7 @@
+import sys as _sys
+if '--help' in _sys.argv or '-h' in _sys.argv:
+    print('Usage: ' + __file__ + ' [--help]')
+    _sys.exit(0)
 """Map a People-DB person -> a CLEAN Google contact-card payload (Choice-2).
 Card fields only, properly labeled, TEMPORAL (current facts only). NEVER Notes,
 NEVER the Weave/OSINT enrichment (that stays in people.db). Returns (body, update_mask)."""

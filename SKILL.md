@@ -41,7 +41,7 @@ metadata:
       default: ""
     - key: WEAVE_BATCH_SIZE
       description: Contacts per enrichment batch
-      default: "10"
+      default: "200"
     - key: WEAVE_DEADLINE_HOUR_ET
       description: Hour (ET) after which overnight enrichment stops
       default: "5"
@@ -56,6 +56,9 @@ metadata:
       default: ""
     - key: WEAVE_ONLY_FILE
       description: Restrict a run to a single contact id
+      default: ""
+    - key: WEAVE_PIC_MODE
+      description: Profile picture enrichment mode (additive, improve, auto, or unset to disable)
       default: ""
     - key: WORKSPACE_MCP_CREDENTIALS_DIR
       description: Directory holding workspace MCP credentials
@@ -212,6 +215,14 @@ user-stated), `source_ref`, `record_time` (ISO 8601), and `confidence`
 (inbound sync, SearXNG health, discovery probe, junk sweep, stale-DB removal,
 edges FK check) and the I/O examples for each direction.
 
+### Free search/extraction sources
+
+SearXNG free engines; Sift uses direct HTTP, Google cache, Wayback, Jina Reader. Details: `references/discovery-fallback.md`.
+
+### Overnight enrichment pipeline (as of 2026‑10‑17)
+
+Batch size 200, 0.1 s cooldown between contacts, full bidirectional sync every 500 enriched contacts, and a hard 5 am ET deadline. Contacts with `is_pseudo = 1`, `is_archived = 1`, or `is_deceased = 1` are excluded from enrichment; `identity=none` results (no corroborated profile) write nothing.
+
 The three most often skipped, and what each prevents:
 
 - [ ] **Inbound sync first** — else gap queries read stale rows and facts land
@@ -232,6 +243,10 @@ Three rules carry most of the risk; full detail in `references/connectors.md`:
   whole book. Enrichment-derived values are withheld: Weave's guesses must not
   become the contact's own record.
 
+## Profile picture discovery and sync
+
+See `references/profile-pictures.md` and `scripts/profile_pic.py`. Gated behind `WEAVE_PIC_MODE`; disabled by default.
+
 ## Discovery Source Availability & No-Fabrication Rule
 
 **No-fabrication is non-negotiable:** an empty discovery result means "no data,"
@@ -246,23 +261,13 @@ rate-limit handling, and the three-way decision matrix:
 - `web_search` empty payload = non-functional; SearXNG `too many requests` =
   backoff and retry; `access denied` = won't recover this run
 
-## OKRs, journals, and cooperation
+## OKRs, journals, cooperation
 
-- **OKR definitions and targets**: `references/okrs.md`.
-- **Observation Journal** — query runs, upsert runs, import runs.
-  **Action Journal** — sync runs, writeback runs.
-- **Cooperation**: Chronicle supplies entity enrichment via journal payloads;
-  Scout hands over OSINT findings as upsert candidates; Dispatch reads social
-  context when drafting; Clay (Mesh MCP) is the CRM sync target.
+OKRs: `references/okrs.md`. Journals: Observation (query/upsert/import), Action (sync/writeback). Cooperation: Chronicle, Scout, Dispatch, Clay (Mesh MCP).
 
 ## Background tasks
 
-| Job name | Schedule | Command |
-|---|---|---|
-| `weave:sync-google` | `0 4 * * *` | `AGENT_ROOT=<hermes-home>/profiles/indigo HOME=/root python3 -u {skill_root}/scripts/google_sync.py` |
-| `weave:enrichability-recalc` | `0 1 * * *` | `python3 {skill_root}/scripts/recalculate_enrichability.py` |
-
-Skill updates are **not** one of these — see "Updating this skill" below.
+`weave:sync-google` (0 4 * * *), `weave:enrichability-recalc` (0 1 * * *). Updates via fleet cron.
 
 ## Cron invocation and overnight enrichment
 
@@ -277,12 +282,7 @@ authoritative — this skill is. Never stop a "bridge" or run
 
 ## Updating this skill
 
-`weave.update` is **retired**; updates run fleet-wide from the centralized
-`skills:update-fleet` cron (`update_skill.sh` at the agent root), which never
-discards uncommitted or unpushed local work. Do not `git pull` this skill in
-place and do not re-add a per-skill updater — removed 2026-09-24 for
-duplicating and contradicting the centralized updater. What to check when the
-skill is stale: `references/self-update.md`.
+`weave.update` retired; fleet-wide `skills:update-fleet` cron handles updates. See `references/self-update.md`.
 
 ## Error handling
 

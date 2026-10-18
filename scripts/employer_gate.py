@@ -1,3 +1,7 @@
+import sys as _sys
+if '--help' in _sys.argv or '-h' in _sys.argv:
+    print('Usage: ' + __file__ + ' [--help]')
+    _sys.exit(0)
 """An inferred employer may only reach the contact record if something agrees.
 
 'Heriot-Watt University' was not junk-SHAPED. It read as a perfectly good

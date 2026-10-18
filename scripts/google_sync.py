@@ -943,7 +943,7 @@ def sync_outbound(token, last_sync_at, only_person_ids=None):
         _ph2 = ",".join(":sq%d" % i for i in range(len(scoped)))
         rows = weave.execute(
             "SELECT google_resource_name, name_given, name_family, email, phone, "
-            "org, occupation, location_city, location_country, id FROM persons "
+            "org, occupation, location_city, location_country, id, avatar_url FROM persons "
             "WHERE id IN (%s)" % _ph2,
             {"sq%d" % i: v for i, v in enumerate(scoped)})
     else:
@@ -953,7 +953,8 @@ def sync_outbound(token, last_sync_at, only_person_ids=None):
                    p.email AS email, p.phone AS phone, p.org AS org,
                    p.occupation AS occupation,
                    p.location_city AS location_city,
-                   p.location_country AS location_country, p.id AS id
+                   p.location_country AS location_country, p.id AS id,
+                   p.avatar_url AS avatar_url
             FROM persons p
             -- Select on the FACT's timestamp as well as the person row's, and
             -- do NOT exclude source_type 'imported'.
@@ -1059,7 +1060,7 @@ def sync_outbound(token, last_sync_at, only_person_ids=None):
         except NameError:
             return {}
 
-    def build_contact_body(rn, given, family, email, phone, org, title, city, country, pid):
+    def build_contact_body(rn, given, family, email, phone, org, title, city, country, pid, avatar_url=None):
         phone_clean = _validate_phone(phone)
         body = {}
         _prev_person = existing_lookup(rn) or {}
@@ -1210,6 +1211,7 @@ def sync_outbound(token, last_sync_at, only_person_ids=None):
             r["google_resource_name"], r["name_given"], r["name_family"],
             r["email"], r["phone"], r["org"], r["occupation"],
             r["location_city"], r["location_country"], r["id"],
+            r.get("avatar_url"),
         )
         if not body:
             skipped += 1
@@ -1236,6 +1238,7 @@ def sync_outbound(token, last_sync_at, only_person_ids=None):
             r["google_resource_name"] or "", _g, _f2,
             r["email"] or "", r["phone"] or "", r["org"] or "", r["occupation"] or "",
             r["location_city"] or "", r["location_country"] or "", r["id"],
+            r.get("avatar_url"),
         )
         if not body:
             skipped += 1
@@ -1582,6 +1585,22 @@ def sync_outbound(token, last_sync_at, only_person_ids=None):
         "outbound_created": created_count,
         "outbound_create_failed": create_failed,
     }
+
+
+import base64
+
+def update_contact_photo(resource_name, image_bytes, token=None):
+    """Set the profile photo for a Google contact using updateContactPhoto."""
+    if token is None:
+        token = get_access_token()
+    b64 = base64.b64encode(image_bytes).decode('ascii')
+    url = f"{PEOPLE_API_BASE}/{resource_name}:updateContactPhoto"
+    body = {"photoBytes": b64}
+    try:
+        res = _api_patch(url, token, body)
+        return res
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def push_person(person_id, token=None):

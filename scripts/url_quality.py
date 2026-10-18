@@ -1,3 +1,7 @@
+import sys as _sys
+if '--help' in _sys.argv or '-h' in _sys.argv:
+    print('Usage: ' + __file__ + ' [--help]')
+    _sys.exit(0)
 """Is this URL a page about a PERSON we identified, or just a page containing a name?
 
 ocas-scout promotes generic web-search results to `profile_website` facts. A

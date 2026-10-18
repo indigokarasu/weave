@@ -40,7 +40,7 @@ SCOUT_TOP_SITES = 300   # maigret site breadth per contact (speed vs coverage)
 # dedupe index, and an etag batchGet for all 566 rows the bulk query selects --
 # 4.5 minutes and ~2,500 contact-reads a pass, 32 passes in a 970-contact run.
 # That read volume is what earned the HTTP 429s. A targeted push is 2 API calls.
-FULL_SYNC_EVERY = 200   # full bidirectional sync every N enriched contacts.
+FULL_SYNC_EVERY = 500   # full bidirectional sync every N enriched contacts.
                         # Still needed: INBOUND cannot be done per contact -- it
                         # is how the owner's own Google edits come back -- and
                         # creates need the whole-address-book dedupe index.
@@ -67,6 +67,7 @@ from weave_enrich import (
     log, scout_research_contact, store_scout_findings,
     has_sufficient_anchors,
 )
+import profile_pic
 
 # ─── Weave I/O ──────────────────────────────────────────────────────────────
 
@@ -570,9 +571,9 @@ def main():
     # Overridable so a tuning loop can run small rounds; the nightly cron
     # sets nothing and keeps the original 50.
     try:
-        _batch = int(os.environ.get("WEAVE_BATCH_SIZE", "50"))
+        _batch = int(os.environ.get("WEAVE_BATCH_SIZE", "200"))
     except ValueError:
-        _batch = 50
+        _batch = 200
     # Searchable contacts first. The SQL ordering ranks by how many columns are
     # populated, which was right when every field was an extra anchor and is wrong
     # now that an anchor is required: a contact with no email cannot be resolved
@@ -656,7 +657,47 @@ def main():
                 min_identity="med",
             )
 
-            if n_written == 0:
+            pic_mode = os.environ.get("WEAVE_PIC_MODE")
+            pic_url = None
+            if pic_mode:
+                try:
+                    from weave_sqlite import WeaveDB
+                    weave = WeaveDB(SQLITE_DB)
+                    row = weave.execute("SELECT avatar_url FROM persons WHERE id = ?", (contact_id,))
+                    avatar_url = row[0]['avatar_url'] if row else None
+                    fact_rows = weave.execute(
+                        "SELECT f.predicate, f.value FROM facts f JOIN edges e ON e.target_id = f.id WHERE e.source_id = ? AND e.rel_type = 'HasFact'",
+                        (contact_id,)
+                    )
+                    urls = [r['value'] for r in fact_rows if r['predicate'].startswith('profile_') or r['predicate'] == 'website']
+                    contact_for_pic = {
+                        'id': contact_id,
+                        'name': name,
+                        'avatar_url': avatar_url,
+                        'urls': urls,
+                    }
+                    pic_url, score = profile_pic.enrich_profile_pic(contact_for_pic, mode=pic_mode)
+                    if pic_url:
+                        log(f"  [pic] updated avatar for {name} (score {score:.2f})")
+                        # Push the photo to Google Contacts
+                        try:
+                            from google_sync import update_contact_photo
+                            res = weave.execute("SELECT google_resource_name FROM persons WHERE id = ?", (contact_id,))
+                            rn = res[0]['google_resource_name'] if res else None
+                            if rn:
+                                img = profile_pic.fetch_image_bytes(pic_url)
+                                if img:
+                                    photo_res = update_contact_photo(rn, img)
+                                    if 'error' in photo_res:
+                                        log(f"  [pic] photo push failed: {photo_res['error']}")
+                                    else:
+                                        log(f"  [pic] photo pushed to Google")
+                        except Exception as e:
+                            log(f"  [pic] photo push error: {e}")
+                except Exception as e:
+                    log(f"  [pic] error: {e}")
+
+            if n_written == 0 and not pic_url:
                 # "Nothing written" has two opposite causes and they were counted
                 # as one. A contact whose data is already on file is complete, not
                 # failed: recording it with an empty field list gave it the short
@@ -683,6 +724,8 @@ def main():
             enriched_count += 1
             save_progress(contact_id, name, written_fields)
 
+            # Profile picture enrichment moved earlier
+
             # Push this one contact right now. Batching the pushes is what was
             # rate limiting the run, and it also meant a contact enriched at
             # 23:05 did not reach Google until the next 30 were done.
@@ -700,7 +743,7 @@ def main():
             failed_count += 1
             save_progress(contact_id, name, [], error=str(e)[:200])
 
-        time.sleep(0.5)
+        time.sleep(0.1)
 
     # Final sync
     # The site gate self-extends: every run probes sites it has not seen and

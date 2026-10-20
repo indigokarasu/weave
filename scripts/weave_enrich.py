@@ -334,6 +334,91 @@ def fetch_page(url):
     return None, None
 
 
+def fetch_via_tinyfish(url):
+    """Fetch a page using TinyFish stealth browser for auth-walled sites.
+    Returns (text_content, method) or (None, None).
+    """
+    try:
+        import subprocess
+        timeout = 30
+        # Import the tinyfish helper
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ocas-sift", "scripts"))
+        from tinyfish_helper import browse_and_extract
+        
+        # Use TinyFish to extract main text content
+        extractor_js = (
+            "const selectors = ["
+            "'article', 'main', '[role=\"main\"]', '.content', '.post-content', "
+            "'.entry-content', '.article-content', '.page-content', '#content', '#main'];"
+            "let text = '';"
+            "for (const selector of selectors) {"
+            "  const el = document.querySelector(selector);"
+            "  if (el) {"
+            "    text = el.innerText || el.textContent || '';"
+            "    if (text.trim().length > 100) break;"
+            "  }"
+            "}"
+            "if (!text || text.trim().length < 100) {"
+            "  text = document.body.innerText || document.body.textContent || '';"
+            "}"
+            "return text;"
+        )
+        
+        # Write the script manually to avoid f-string quoting issues
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.js', delete=False) as f:
+            f.write("const { chromium } = require('/root/.hermes/profiles/indigo/skills/ocas-weave/scripts/node_modules/playwright-core');\n")
+            f.write("\nasync function run() {\n")
+            f.write("    const { execSync } = require('child_process');\n")
+            f.write(f"    const output = execSync(`/root/.hermes/profiles/indigo/node/bin/tinyfish browser session create --url \"{url}\"`, {{ encoding: 'utf8' }});\n")
+            f.write("    const result = JSON.parse(output.trim());\n")
+            f.write("    const browser = await chromium.connectOverCDP(result.cdp_url);\n")
+            f.write("    const context = browser.contexts()[0];\n")
+            f.write("    const page = context.pages()[0];\n")
+            f.write("    page.setDefaultTimeout(60000);\n")
+            f.write("    try { await page.waitForLoadState('networkidle', { timeout: 30000 }); } catch (e) {}\n")
+            f.write("    await page.waitForTimeout(5000);\n")
+            f.write("    const extracted_result = await page.evaluate(() => {\n")
+            f.write("        " + extractor_js + "\n")
+            f.write("    });\n")
+            f.write("    await browser.close();\n")
+            f.write("    execSync(`/root/.hermes/profiles/indigo/node/bin/tinyfish browser session close ${result.session_id}`, { encoding: 'utf8' });\n")
+            f.write("    return extracted_result;\n")
+            f.write("}\n\n")
+            f.write("run().then(r => {\n")
+            f.write("    if (r !== null && r !== undefined) console.log('SUCCESS:' + JSON.stringify(r));\n")
+            f.write("    else console.log('FAILED');\n")
+            f.write("}).catch(err => console.error('ERROR:' + err.message));\n")
+            temp_script = f.name
+        
+        try:
+            result = subprocess.run(
+                ['/root/.hermes/profiles/indigo/node/bin/node', temp_script],
+                capture_output=True, text=True, timeout=timeout
+            )
+            output = result.stdout.strip()
+            if output.startswith('SUCCESS:'):
+                text = json.loads(output[8:])
+                if isinstance(text, str) and len(text.strip()) >= 50:
+                    return text[:5000], "tinyfish"
+                return None, None
+            return None
+        except subprocess.TimeoutExpired:
+            return None
+        except Exception:
+            return None
+        finally:
+            try:
+                os.unlink(temp_script)
+            except:
+                pass
+        return None  # unreachable but satisfies return type
+    except Exception as e:
+        return None, None
+
+
 def extract_from_content(name, content, url):
     """
     Extract occupation, org, location_city, email from page content.
@@ -1513,6 +1598,13 @@ def sift_extract_from_pages(name, search_results, max_pages=3, context=None):
             fetched_count += 1
             if page_text:
                 method = fetch_method
+        else:
+            # For auth-walled URLs or when we've hit the fetch limit with regular fetch, try TinyFish
+            if fetched_count < max_pages:  # Only try if we haven't exhausted our fetch budget
+                page_text, fetch_method = fetch_via_tinyfish(url)
+                fetched_count += 1
+                if page_text:
+                    method = fetch_method
 
         content_for_llm = page_text if page_text else f"{title}\n{snippet}"
 

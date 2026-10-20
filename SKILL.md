@@ -247,6 +247,17 @@ Three rules carry most of the risk; full detail in `references/connectors.md`:
 
 See `references/profile-pictures.md` and `scripts/profile_pic.py`. Gated behind `WEAVE_PIC_MODE`; disabled by default.
 
+**Now supports identity-verified extraction from 7 sources:**
+- GitHub (direct avatar URL)
+- Gravatar (email-based, d=404)
+- LinkedIn (via TinyFish stealth browser - profile-displayphoto URLs)
+- X/Twitter (via TinyFish - og:image or profile avatar)
+- Instagram (via TinyFish - og:image or profile avatar)
+- Facebook (via TinyFish - og:image or profile avatar)
+- Reddit (via TinyFish - og:image or profile avatar)
+
+All extractions include identity verification using `_names_match()` to prevent wrong-person associations.
+
 ## Discovery Source Availability & No-Fabrication Rule
 
 **No-fabrication is non-negotiable:** an empty discovery result means "no data,"

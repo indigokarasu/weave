@@ -14,10 +14,7 @@
 
 ## How It Works
 
-1. **Candidate Discovery**: Uses three sources:
-   - Known social-media URLs already discovered by the main Sift pass (LinkedIn, GitHub, Twitter, Instagram, Facebook).
-   - Free-text SearXNG search for `<name> profile picture avatar` — extracts direct image URLs and og:image tags from result pages.
-   - SearXNG image search for `<name> profile picture`.
+- **Candidate discovery**: Uses only known sources already associated with the contact (GitHub, Twitter/X, Instagram, Facebook, and Gravatar from email). The image is known to be the person because it comes from a verified source. **LinkedIn is NOT scrapeable** — automated fetches return redirects/favicons, not the profile picture; only use a direct `media.licdn.com` URL if one was already captured. NO SearXNG image search, free-text search, or random web images are used.
 
 2. **Image Analysis**:
    - **Face Detection**: Uses YuNet ONNX model (cv2.FaceDetectorYN_create) to detect human faces. Requires confidence >= 0.5 and face area >= 5% of image area.
@@ -59,6 +56,11 @@ export WEAVE_PIC_MODE=improve
 export WEAVE_BATCH_SIZE=20
 /root/hermes-agent/.venv/bin/python /root/.hermes/profiles/indigo/skills/ocas-weave/scripts/overnight_enrichment.py
 ```
+
+## Pitfalls
+
+- **Face detection must be a hard gate**: skip candidates without a detected face. The scoring formula alone does not enforce this — an image with high photo/sharpness/color but no face can still win if not gated.
+- **Revert avatars without faces**: After enrichment, scan all avatars with face detection; revert any that lack a detected face (set avatar_url=NULL, remove profile_pic fact). The scoring formula alone does not enforce face presence — an image with high photo/sharpness/color but no face can still win if not gated.
 
 ## Safety
 

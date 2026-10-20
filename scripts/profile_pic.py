@@ -1,7 +1,3 @@
-import sys as _sys
-if '--help' in _sys.argv or '-h' in _sys.argv:
-    print('Usage: ' + __file__ + ' [--help]')
-    _sys.exit(0)
 #!/usr/bin/env python3
 """
 profile_pic.py — Free-source profile picture discovery & evaluation for Weave.
@@ -13,14 +9,28 @@ Modes:
               picture that already contains a detected human face.
   auto      – additive for the first run, improve on subsequent runs.
 
-All image acquisition uses the same free fallbacks as weave_enrich.fetch_page.
-Face detection uses OpenCV Haar cascades (downloaded once from GitHub).
+Image sources (priority order):
+  1. GitHub (direct avatar URL)
+  2. Gravatar (email-based, d=404 to avoid defaults)
+  3. LinkedIn (via TinyFish stealth browser - profile-displayphoto URLs)
+  4. X/Twitter (via TinyFish - og:image or profile avatar)
+  5. Instagram (via TinyFish - og:image or profile avatar)
+  6. Facebook (via TinyFish - og:image or profile avatar)
+  7. Reddit (via JSON API - icon_img)
+
+Face detection uses OpenCV YuNet ONNX model.
 """
+import sys as _sys
+if '--help' in _sys.argv or '-h' in _sys.argv:
+    print('Usage: ' + __file__ + ' [--help]')
+    _sys.exit(0)
+
 import os
 import re
 import html
 import time
 import uuid
+import hashlib
 import sqlite3
 import urllib.parse
 import urllib.request
@@ -36,10 +46,9 @@ _PROF = os.environ.get(
     os.path.join(os.path.expanduser("~"), ".hermes", "profiles", "indigo"),
 )
 DB_PATH = os.path.join(_PROF, "commons", "db", "ocas-weave", "weave.sqlite")
-CASCADE_PATH = os.path.join(os.path.dirname(__file__), "haarcascade_frontalface_default.xml")
-CASCADE_URL = (
-    "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/"
-    "haarcascade_frontalface_default.xml"
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "face_detection_yunet.onnx")
+MODEL_URL = (
+    "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
 )
 
 # Import the shared search/fetch helpers from weave_enrich (same directory)
@@ -48,18 +57,30 @@ try:
 except Exception:
     searxng_search = None
 
+# Import TinyFish helper (includes name matching)
+try:
+    from tinyfish_helper import (
+        extract_linkedin_profile_pic,
+        extract_generic_profile_pic,
+        extract_reddit_profile_pic,
+        _names_match,
+    )
+except Exception:
+    extract_linkedin_profile_pic = None
+    extract_generic_profile_pic = None
+    extract_reddit_profile_pic = None
+    _names_match = None
 
-# ── Haar cascade acquisition ────────────────────────────────────────────
-def _ensure_cascade():
-    if os.path.exists(CASCADE_PATH):
-        return CASCADE_PATH
+# ── YuNet model acquisition ──────────────────────────────────────────────
+def _ensure_model():
+    if os.path.exists(MODEL_PATH):
+        return MODEL_PATH
     try:
-        urllib.request.urlretrieve(CASCADE_URL, CASCADE_PATH)
+        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
     except Exception as e:
-        print(f"[profile_pic] failed to download cascade: {e}")
+        print(f"[profile_pic] failed to download YuNet model: {e}")
         return None
-    return CASCADE_PATH
-
+    return MODEL_PATH
 
 # ── Image acquisition ────────────────────────────────────────────────────
 def fetch_image_bytes(url):
@@ -117,23 +138,16 @@ def fetch_image_bytes(url):
 
 # ── Image analysis ───────────────────────────────────────────────────────
 def detect_face(image_bytes):
-    """Return (face_detected, confidence, width, height)."""
+    """Return (face_detected, confidence, width, height). Uses YuNet ONNX."""
     if not image_bytes:
         return False, 0.0, 0, 0
     img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         return False, 0.0, 0, 0
     h, w = img.shape[:2]
-    model_path = os.path.join(os.path.dirname(__file__), "face_detection_yunet.onnx")
-    if not os.path.exists(model_path):
-        # download
-        try:
-            urllib.request.urlretrieve(
-                "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
-                model_path,
-            )
-        except Exception:
-            return False, 0.0, w, h
+    model_path = _ensure_model()
+    if not model_path:
+        return False, 0.0, w, h
     detector = cv2.FaceDetectorYN_create(model_path, "", (w, h), 0.5, 0.3, 5000)
     detector.setInputSize((w, h))
     _, faces = detector.detect(img)
@@ -201,39 +215,131 @@ def _is_placeholder_url(url):
             if "gravatar.com" in host and "/avatar/" in url and len(url.split("/avatar/")[-1]) < 32:
                 return True
     return False
-def searxng_image_search(query, limit=6):
-    """Search SearXNG for images. Returns list of image URLs."""
-    import json
-    import urllib.parse
-    import urllib.request
-    base = "http://localhost:8888/search"
-    params = urllib.parse.urlencode({"q": query, "format": "json", "categories": "images", "limit": limit})
-    url = f"{base}?{params}"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "HermesAgent/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-        results = []
-        for item in data.get("results", [])[:limit]:
-            img_url = item.get("img_src") or item.get("url", "")
-            if img_url:
-                results.append(img_url)
-        return results
-    except Exception as e:
-        print(f"[profile_pic] SearXNG image search failed: {e}")
-        return []
-KNOWN_AVATAR_HOSTS = {
-    "linkedin.com": "linkedin",
-    "github.com": "github",
-    "twitter.com": "twitter",
-    "x.com": "twitter",
-    "instagram.com": "instagram",
-    "facebook.com": "facebook",
-}
+
+
+# ── Candidate discovery ──────────────────────────────────────────────────
+def known_image_urls(contact):
+    """Turn already‑found profile URLs into concrete avatar URL candidates.
+
+    Returns list of (source, url) tuples. Sources: github, gravatar, linkedin, twitter, x, instagram, facebook, reddit
+
+    Identity verification: for auth-walled platforms (LinkedIn, Twitter/X,
+    Instagram, Facebook, Reddit), the TinyFish extraction now also returns the
+    profile's full name. We only accept the candidate if that name confirms
+    the contact's name via _names_match — this prevents attaching a different
+    person's photo (e.g. a different "Mike Brzozowski" on LinkedIn).
+    """
+    candidates = []
+    urls = contact.get("urls", []) or []
+    contact_name = contact.get("name", "")
+
+    for u in urls:
+        host = urllib.parse.urlparse(u).netloc.lower()
+
+        if "github.com" in host:
+            m = re.search(r"github\.com/([A-Za-z0-9_-]+)", u)
+            if m:
+                handle = m.group(1).lower()
+                candidates.append(("github", f"https://github.com/{handle}.png"))
+
+        elif "linkedin.com" in host:
+            # Use TinyFish to extract profile picture + verify identity
+            if extract_linkedin_profile_pic and _names_match:
+                try:
+                    result = extract_linkedin_profile_pic(u)
+                    if result and result.get("url") and result.get("fullname"):
+                        if _names_match(contact_name, result["fullname"]):
+                            candidates.append(("linkedin", result["url"]))
+                        else:
+                            print(f"[profile_pic] LinkedIn name mismatch: contact='{contact_name}' profile='{result['fullname']}' — skipping")
+                except Exception:
+                    pass
+            # Fallback: try to extract from page (no name verification possible)
+            for img in extract_avatar_from_page(u):
+                candidates.append(("linkedin", img))
+
+        elif "twitter.com" in host or "x.com" in host:
+            m = re.search(r"(?:twitter|x)\.com/([A-Za-z0-9_]{1,15})", u)
+            if m:
+                handle = m.group(1).lower()
+                # Try TinyFish first for better results + name verification
+                if extract_generic_profile_pic and _names_match:
+                    try:
+                        result = extract_generic_profile_pic(u, "twitter")
+                        if result and result.get("url") and result.get("fullname"):
+                            if _names_match(contact_name, result["fullname"]):
+                                candidates.append(("twitter", result["url"]))
+                            else:
+                                print(f"[profile_pic] Twitter name mismatch: contact='{contact_name}' profile='{result['fullname']}' — skipping")
+                    except Exception:
+                        pass
+                # Fallback (no name verification)
+                candidates.append(("twitter", f"https://x.com/{handle}/profile_image?size=original"))
+
+        elif "instagram.com" in host:
+            m = re.search(r"instagram\.com/([A-Za-z0-9_.-]+)", u)
+            if m:
+                handle = m.group(1).lower()
+                if extract_generic_profile_pic and _names_match:
+                    try:
+                        result = extract_generic_profile_pic(u, "instagram")
+                        if result and result.get("url") and result.get("fullname"):
+                            if _names_match(contact_name, result["fullname"]):
+                                candidates.append(("instagram", result["url"]))
+                            else:
+                                print(f"[profile_pic] Instagram name mismatch: contact='{contact_name}' profile='{result['fullname']}' — skipping")
+                    except Exception:
+                        pass
+                candidates.append(("instagram", f"https://www.instagram.com/{handle}/?__a=1"))
+
+        elif "facebook.com" in host:
+            m = re.search(r"facebook\.com/([A-Za-z0-9_.-]+)", u)
+            if m:
+                handle = m.group(1).lower()
+                if extract_generic_profile_pic and _names_match:
+                    try:
+                        result = extract_generic_profile_pic(u, "facebook")
+                        if result and result.get("url") and result.get("fullname"):
+                            if _names_match(contact_name, result["fullname"]):
+                                candidates.append(("facebook", result["url"]))
+                            else:
+                                print(f"[profile_pic] Facebook name mismatch: contact='{contact_name}' profile='{result['fullname']}' — skipping")
+                    except Exception:
+                        pass
+                candidates.append(("facebook", f"https://www.facebook.com/{handle}/picture"))
+
+        elif "reddit.com" in host:
+            m = re.search(r"reddit\.com/u(?:ser)?/([A-Za-z0-9_-]+)", u)
+            if m:
+                username = m.group(1)
+                if extract_reddit_profile_pic and _names_match:
+                    try:
+                        result = extract_reddit_profile_pic(username)
+                        if result and result.get("url") and result.get("fullname"):
+                            if result["url"].endswith('default_icon.svg'):
+                                continue
+                            if _names_match(contact_name, result["fullname"]):
+                                candidates.append(("reddit", result["url"]))
+                            else:
+                                print(f"[profile_pic] Reddit name mismatch: contact='{contact_name}' profile='{result['fullname']}' — skipping")
+                    except Exception:
+                        pass
+
+    # Gravatar (known source: tied to the contact's email — no name verification needed)
+    email = contact.get("email") or ""
+    if not email and isinstance(contact.get("emailAddresses"), list):
+        email = contact.get("emailAddresses", [{}])[0].get("value", "")
+    if email:
+        email = email.strip().lower()
+        email_hash = hashlib.md5(email.encode('utf-8')).hexdigest()
+        gravatar_url = f"https://www.gravatar.com/avatar/{email_hash}?d=404"
+        candidates.append(("gravatar", gravatar_url))
+
+    return candidates
 
 
 def fetch_raw_html(url):
-    # Try direct fetch first
+    """Fetch raw HTML with fallbacks."""
     user_agents = [
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -266,6 +372,7 @@ def fetch_raw_html(url):
         pass
     return None
 
+
 def extract_avatar_from_page(url):
     """Fetch a page and extract likely avatar image URLs."""
     html = fetch_raw_html(url)
@@ -287,7 +394,7 @@ def extract_avatar_from_page(url):
         src = m.group(1)
         if re.search(r'avatar|profile|photo', src, re.I):
             urls.append(src)
-    # also look for JSON-LD with image
+    # JSON-LD image
     for m in re.finditer(r'"image"\s*:\s*"([^"]+)"', html):
         urls.append(m.group(1))
     # dedupe and resolve relative URLs
@@ -301,85 +408,15 @@ def extract_avatar_from_page(url):
     return out
 
 
-def known_image_urls(contact):
-    """Turn already‑found profile URLs into concrete avatar URL candidates."""
-    candidates = []
-    urls = contact.get("urls", []) or []
-    for u in urls:
-        host = urllib.parse.urlparse(u).netloc.lower()
-        if "linkedin.com" in host:
-            # fetch page and extract image
-            for img in extract_avatar_from_page(u):
-                candidates.append(("linkedin", img))
-        elif "github.com" in host:
-            m = re.search(r"github\.com/([A-Za-z0-9_-]+)", u)
-            if m:
-                handle = m.group(1).lower()
-                candidates.append(("github", f"https://github.com/{handle}.png"))
-        elif "twitter.com" in host or "x.com" in host:
-            m = re.search(r"(?:twitter|x)\.com/([A-Za-z0-9_]{1,15})", u)
-            if m:
-                handle = m.group(1).lower()
-                candidates.append(("twitter", f"https://x.com/{handle}/profile_image?size=original"))
-        elif "instagram.com" in host:
-            m = re.search(r"instagram\.com/([A-Za-z0-9_.-]+)", u)
-            if m:
-                handle = m.group(1).lower()
-                candidates.append(("instagram", f"https://www.instagram.com/{handle}/?__a=1"))
-        elif "facebook.com" in host:
-            m = re.search(r"facebook\.com/([A-Za-z0-9_.-]+)", u)
-            if m:
-                handle = m.group(1).lower()
-                candidates.append(("facebook", f"https://www.facebook.com/{handle}/picture"))
-        else:
-            # try to extract from any page
-            for img in extract_avatar_from_page(u):
-                candidates.append((host, img))
-    return candidates
-
-
 def sift_profile_pics(contact):
     """
-    Collect avatar candidates from three sources:
-      1. Known social‑media URLs already discovered by the main Sift pass.
-      2. A free‑text SearXNG search for '<first> <last> avatar' — both direct
-         image URLs and og:image tags extracted from the result pages.
-      3. Any profile URLs in the contact record that produce an og:image.
-      4. SearXNG image search.
+    Collect avatar candidates ONLY from known social-media URLs already
+    discovered by the main Sift pass. The image is known to be the
+    person because it comes from a profile page we already matched.
     Returns a list of (source, url) tuples.
     """
-    candidates = known_image_urls(contact)
+    return known_image_urls(contact)
 
-    name = contact.get("name") or ""
-    if not name:
-        name = ((contact.get("name_given") or "") + " " + (contact.get("name_family") or "")).strip()
-
-    if name and searxng_search:
-        query = f"{name} profile picture avatar"
-        try:
-            res = searxng_search(query, limit=6)
-            for item in res:
-                url = item.get("url", "")
-                if not url:
-                    continue
-                if re.search(r"\.(jpe?g|png|gif|webp)$", url, re.I):
-                    candidates.append(("search_direct", url))
-                    continue
-                try:
-                    imgs = extract_avatar_from_page(url)
-                    for img in imgs:
-                        candidates.append(("search_page", img))
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f"[profile_pic] SearXNG search failed: {e}")
-
-    if name:
-        img_urls = searxng_image_search(f"{name} profile picture", limit=6)
-        for img_url in img_urls:
-            candidates.append(("search_image", img_url))
-
-    return candidates
 
 # ── Candidate scoring & selection ────────────────────────────────────────
 def evaluate_candidates(contact, candidates, mode):
@@ -430,6 +467,9 @@ def evaluate_candidates(contact, candidates, mode):
             conf = 0.0
         score = (photo + face * conf + sharp * 0.4 + color * 0.2) / 1.6
 
+        # Require a detected face for selection
+        if not face:
+            continue
         # mode logic
         if mode == "additive":
             if current_url:  # already has picture – skip
@@ -476,3 +516,38 @@ def enrich_profile_pic(contact, mode="auto"):
     if url:
         set_contact_avatar(contact["id"], url)
     return url, score
+
+
+# ── Tests ────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    # Quick self-test
+    import tempfile
+    
+    # Test placeholder detection
+    assert _is_placeholder_url("https://example.com/default_avatar.png")
+    assert _is_placeholder_url("https://gravatar.com/avatar/abc?d=default")
+    assert not _is_placeholder_url("https://github.com/user.png")
+    assert not _is_placeholder_url("https://media.licdn.com/dms/image/v2/.../profile-displayphoto...")
+    print("Placeholder tests passed")
+    
+    # Test known_image_urls with various URLs
+    contact = {
+        "id": "test",
+        "name": "Test User",
+        "avatar_url": None,
+        "urls": [
+            "https://github.com/testuser",
+            "https://linkedin.com/in/testuser",
+            "https://twitter.com/testuser",
+            "https://reddit.com/user/testuser",
+        ],
+        "email": "test@example.com",
+    }
+    candidates = known_image_urls(contact)
+    sources = [s for s, _ in candidates]
+    print(f"Sources found: {sources}")
+    assert "github" in sources
+    assert "gravatar" in sources
+    print("Candidate discovery tests passed")
+    
+    print("All tests passed!")

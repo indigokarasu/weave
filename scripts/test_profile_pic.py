@@ -1,7 +1,3 @@
-import sys as _sys
-if '--help' in _sys.argv or '-h' in _sys.argv:
-    print('Usage: ' + __file__ + ' [--help]')
-    _sys.exit(0)
 #!/usr/bin/env python3
 """Tests for profile_pic module."""
 import sys, os, sqlite3
@@ -37,15 +33,39 @@ def test_image_quality():
     assert 0 <= photo <= 1, f"Photo guess out of range: {photo}"
     print(f"Image quality test passed: sharp={sharp}, color={color}, photo={photo}")
 
-def test_searxng_image_search():
-    results = profile_pic.searxng_image_search("Rachel Metz profile picture", limit=3)
-    assert isinstance(results, list), "Should return a list"
-    assert len(results) > 0, "Should return at least one result"
-    print(f"SearXNG image search test passed: {len(results)} results")
+def test_gravatar():
+    contact = {'email': 'test@example.com'}
+    candidates = profile_pic.known_image_urls(contact)
+    gravatar_urls = [u for src, u in candidates if src == 'gravatar']
+    assert len(gravatar_urls) == 1, f"Expected 1 gravatar URL, got {len(gravatar_urls)}"
+    assert 'gravatar.com' in gravatar_urls[0], "URL should contain gravatar.com"
+    print("Gravatar test passed")
+
+def test_candidate_sources():
+    """Test that known_image_urls finds candidates from various platforms."""
+    contact = {
+        "id": "test",
+        "name": "Test User",
+        "avatar_url": None,
+        "urls": [
+            "https://github.com/testuser",
+            "https://linkedin.com/in/testuser",
+            "https://twitter.com/testuser",
+            "https://reddit.com/user/testuser",
+        ],
+        "email": "test@example.com",
+    }
+    candidates = profile_pic.known_image_urls(contact)
+    sources = [s for s, _ in candidates]
+    print(f"Sources found: {sources}")
+    assert "github" in sources
+    assert "gravatar" in sources
+    print("Candidate discovery tests passed")
 
 if __name__ == "__main__":
     test_placeholder_filter()
     test_face_detection()
     test_image_quality()
-    test_searxng_image_search()
+    test_gravatar()
+    test_candidate_sources()
     print("All tests passed!")

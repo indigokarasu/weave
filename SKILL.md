@@ -11,7 +11,7 @@ description: >-
   OSINT research (use Scout), general knowledge-graph entity resolution, CRM or
   sales pipeline automation, personality profiling without evidence, or web
   research with no social-graph need (use Sift).
-source: https://github.com/<agent-handle>/weave
+source: https://github.com/indigokarasu/weave
 includes:
 - references/**
 - scripts/**

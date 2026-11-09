@@ -182,9 +182,13 @@ def build_indexes(con, people=None):
     Index google's display names too, and first+last as a last resort so a middle
     name ('Yelena Rubinshteyn Danziger') does not defeat the match."""
     by_rn, by_name, by_email, by_ends = {}, {}, {}, {}
-    for r in con.execute("SELECT id, name, google_resource_name, email FROM persons"):
+    _REAL.clear()
+    for r in con.execute("SELECT id, name, google_resource_name, email, "
+                         "COALESCE(is_pseudo,0) AS is_pseudo FROM persons"):
         if r["google_resource_name"]:
             by_rn[r["google_resource_name"]] = r["id"]
+            if not r["is_pseudo"]:
+                _REAL.add(r["id"])
         n = _norm_name(r["name"])
         if n:
             by_name.setdefault(n, set()).add(r["id"])
@@ -213,22 +217,39 @@ def build_indexes(con, people=None):
     return by_rn, by_name, by_email, by_ends
 
 
+# Ids of real (non-pseudo, Google-backed) contacts, filled by build_indexes.
+# When a name or email matches several rows, the one real contact among them
+# wins: duplicate pseudo rows must never make a real person "ambiguous".
+_REAL = set()
+
+
+def _prefer_real(ids):
+    real = [i for i in ids if i in _REAL]
+    return real[0] if len(real) == 1 else None
+
+
 def resolve_person(name, email, by_name, by_email, by_ends):
     """A weave person id, but only when the answer is unambiguous."""
     if email:
         ids = by_email.get(email) or set()
         if len(ids) == 1:
             return next(iter(ids)), "email"
+        if len(ids) > 1 and _prefer_real(ids):
+            return _prefer_real(ids), "email (real contact)"
     ids = by_name.get(_norm_name(name)) or set()
     if len(ids) == 1:
         return next(iter(ids)), "name"
     if len(ids) > 1:
+        if _prefer_real(ids):
+            return _prefer_real(ids), "name (real contact)"
         return None, "ambiguous"
     e = _ends(name)
     ids = (by_ends.get(e) or set()) if e else set()
     if len(ids) == 1:
         return next(iter(ids)), "first+last"
     if len(ids) > 1:
+        if _prefer_real(ids):
+            return _prefer_real(ids), "first+last (real contact)"
         return None, "ambiguous"
     return None, "unknown"
 
@@ -283,6 +304,13 @@ def plan(people, con):
             if key in _EDGE_MAP:
                 edge, direction, symmetric = _EDGE_MAP[key]
                 oid, how = resolve_person(who, email, by_name, by_email, by_ends)
+                if not oid and how == "ambiguous":
+                    # Several existing rows match. Creating another one only
+                    # deepens the ambiguity, and did: a new pseudo "Jared
+                    # Zimmerman" plus a SpouseOf pair on every sync run
+                    # (2026-11-02..08, 458 rows). Leave it unlinked instead.
+                    skipped.append((nm, rtype, who, "ambiguous; not linked"))
+                    continue
                 if not oid:
                     # Nobody in the address book matches. Storing the name as a
                     # bare string fact leaves the relationship as text on two
@@ -298,6 +326,9 @@ def plan(people, con):
                         skipped.append((nm, rtype, who, "no usable name after date"))
                         continue
                     oid, how = resolve_person(who_clean, email, by_name, by_email, by_ends)
+                    if not oid and how == "ambiguous":
+                        skipped.append((nm, rtype, who_clean, "ambiguous; not linked"))
+                        continue
                     if not oid:
                         oid = str(uuid.uuid4())
                         creates.append((oid, who_clean, who_bday, email))

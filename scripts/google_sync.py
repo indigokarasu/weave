@@ -260,6 +260,7 @@ def sync_inbound(token):
             phone_map[phone] = pid
 
     upserted = enriched = created = skipped = 0
+    inbound_unchanged = 0
     _ovr = _build_override_check(weave)
     for c in contacts:
         rn = c.get("resourceName", "")
@@ -309,6 +310,30 @@ def sync_inbound(token):
         pid = rn_map.get(rn) or (email_map.get(email.lower()) if email else None) or (phone_map.get(phone) if phone else None)
 
         if pid:
+            # Atomic (2026-11-08): compute what the gap-fill below would produce and
+            # skip the write -- and the record_time bump that touched all ~1000 rows
+            # every run -- when nothing would actually change.
+            _cur_rows = weave.execute(
+                "SELECT name, name_given, name_family, email, phone, org, occupation, "
+                "location_city, location_country, google_resource_name FROM persons WHERE id = ?", (pid,))
+            _cur = _cur_rows[0] if _cur_rows else {}
+            def _fill(col, val, ovr=0):
+                cv = _cur.get(col)
+                return val if (cv is None or cv == "" or ovr == 1) else cv
+            _would = {
+                "name": _fill("name", name), "name_given": _fill("name_given", given),
+                "name_family": _fill("name_family", family), "email": _fill("email", email),
+                "phone": _fill("phone", phone),
+                "org": _fill("org", org, _ovr(pid, "org", org)),
+                "occupation": _fill("occupation", title_val, _ovr(pid, "occupation", title_val)),
+                "location_city": _fill("location_city", city, _ovr(pid, "location_city", city)),
+                "location_country": _fill("location_country", country, _ovr(pid, "location_country", country)),
+                "google_resource_name": rn if rn else _cur.get("google_resource_name"),
+            }
+            if _cur and all((_would[k] or "") == (_cur.get(k) or "") for k in _would):
+                inbound_unchanged += 1
+                upserted += 1
+                continue
             # Gap-fill existing record
             weave.execute_write("""
                 UPDATE persons SET
@@ -411,6 +436,7 @@ def sync_inbound(token):
 
     return {"inbound_extras": extra_stats,
             "inbound_upserted": upserted, "inbound_enriched": enriched,
+            "inbound_unchanged": inbound_unchanged,
             "inbound_created": created, "inbound_skipped": skipped,
             "inbound_url_facts": url_stats.get("written", 0),
             "inbound_websites_filled": url_stats.get("website_filled", 0)}
@@ -1006,6 +1032,10 @@ def sync_outbound(token, last_sync_at, only_person_ids=None):
           AND COALESCE(is_pseudo, 0) = 0
           AND COALESCE(is_archived, 0) = 0
           AND COALESCE(is_deceased, 0) = 0
+          -- Weave-only people (his word 2026-11-08: Facebook friends stay out of Google)
+          AND NOT EXISTS (SELECT 1 FROM node_properties np
+                          WHERE np.node_id = persons.id AND np.key = 'google_sync'
+                            AND np.value = 'never')
     """)
 
     # Dedupe against live Google before creating: weave rows have been seen to
@@ -1277,6 +1307,179 @@ def sync_outbound(token, last_sync_at, only_person_ids=None):
     if _bday_kept:
         _log(f"  Outbound: {_bday_kept} birthday(s) left alone - google already has one")
 
+    def _merge_body(rn, body):
+        """Merge weave's values INTO google's current lists (append-only, de-duplicated)."""
+        _prev = existing_map.get(rn) or {}
+        # Google REPLACES a masked list field, and weave holds only one
+        # value per contact, so sending it alone deletes the rest. Merge.
+        def _addr_key(a):
+            # build_contact_body never sets formattedValue, so keying on it
+            # made every address comparison compare "" and the merge silently
+            # echoed google's existing address back, discarding the new one.
+            #
+            # Keying on every part instead appended a duplicate whenever the
+            # same place was SPELLED differently on the two sides. weave holds
+            # one string, "San Francisco, CA", and build_contact_body puts the
+            # second token in `region`; google's stored copy of the same place
+            # may carry it in `country`, or add countryCode:"US", or both.
+            # Measured on the live address book: 21 contacts already carry a
+            # duplicate address and one carries 38 identical copies of
+            # "Portland, OR" -- one per sync pass. So a city-only address is
+            # keyed on its city, which is all that identifies it.
+            street = str(a.get("streetAddress") or "").strip().lower()
+            postal = str(a.get("postalCode") or "").strip().lower()
+            city = str(a.get("city") or "").strip().lower()
+            if street or postal:
+                return "|".join((street, postal, city))
+            # No street, no postal code and no city: there is no PLACE here,
+            # only a bare countryCode. Return the empty string so the caller's
+            # `_v.strip("|")` test is falsy and the entry is never appended.
+            #
+            # This used to return "city|" and claim the caller dropped it, but
+            # "city|".strip("|") == "city", which is truthy -- so every
+            # place-less address was appended after all. That is exactly where
+            # google's orphan {"countryCode": "US"} entries come from: 14 were
+            # already in the address book, and one bulk pass on 2026-08-23 added
+            # 3 more (Munaf Assaf, Steve Arnold, Abhijit Oak).
+            return "city|" + city if city else ""
+        for _f, _keyfn in (("emailAddresses", lambda e: str(e.get("value") or "").strip().lower()),
+                           ("phoneNumbers",  lambda e: str(e.get("value") or "").strip().lower()),
+                           ("addresses",     _addr_key),
+                           # company name only: keying on name+title appended a
+                           # duplicate whenever weave lacked the title google had
+                           ("organizations", lambda e: str(e.get("name") or "").strip().lower()),
+                           ("urls", lambda e: _ukey(e.get("value")) or ""),
+                           # keyed on the PERSON alone: a relationship to one
+                           # person must appear once, whatever it is labelled
+                           ("relations", _relation_person_key),
+                           ("userDefined", lambda e: str(e.get("key") or "").strip().lower())):
+            if _f not in body:
+                continue
+            # metadata is output-only; do not echo google's source ids back
+            _have_raw = [{k: v for k, v in dict(h).items() if k != "metadata"}
+                         for h in (_prev.get(_f) or [])]
+            # Also collapse what is ALREADY there. This block used to check
+            # only whether a NEW entry duplicated an existing one, and passed
+            # google's current list through untouched -- so once duplicates
+            # existed they were immortal. One contact accumulated 39 identical
+            # 'Princeton, NJ' addresses that every pass faithfully preserved,
+            # burying the real street address the owner had typed.
+            #
+            # A contact must never hold two entries with the same value, in
+            # any field, whether or not the field permits multiple values.
+            # The FIRST occurrence wins: google's own ordering puts the
+            # primary entry first, and later copies are the accumulated noise.
+            _have, _seen_h = [], {}
+            for _h in _have_raw:
+                _hk = _keyfn(_h)
+                if not _hk:
+                    _have.append(_h)
+                    continue
+                if _hk in _seen_h:
+                    # Same key twice. For relations the owner's specific
+                    # label ("Husband", "Son") must win over the generic one
+                    # this pipeline derives ("spouse", "child").
+                    if _f == "relations" and _relation_is_generic(_have[_seen_h[_hk]]) \
+                            and not _relation_is_generic(_h):
+                        _have[_seen_h[_hk]] = _h
+                    continue
+                _seen_h[_hk] = len(_have)
+                _have.append(_h)
+            _add = []
+            for _entry in body[_f]:
+                _v = _keyfn(_entry)
+                if not _v.strip("|"):
+                    continue
+                if any(_keyfn(h) == _v for h in _have):
+                    continue
+                # weave stores a CITY; google may already hold the full street
+                # address for that same city. Pushing the city as its own
+                # entry adds a less precise copy of a place already recorded,
+                # which is how one contact accumulated 39 'Princeton, NJ'
+                # rows around the street address the owner had typed. If an
+                # existing address already describes that city, the city-only
+                # entry adds nothing.
+                if _f == "addresses" and not (_entry.get("streetAddress") or "").strip() \
+                        and not (_entry.get("postalCode") or "").strip():
+                    _c = str(_entry.get("city") or "").strip().lower()
+                    if _c and any(str(h.get("city") or "").strip().lower() == _c
+                                  for h in _have):
+                        continue
+                _add.append(_entry)
+            body[_f] = _have + _add
+        if "urls" in body:
+            _seen_u, _norm_u = set(), []
+            for _e in body["urls"]:
+                _c = _canon(_e.get("value"))
+                if not _c:
+                    continue
+                _k = _c.lower()
+                if _k in _seen_u:
+                    continue
+                _seen_u.add(_k)
+                _e = dict(_e)
+                _e["value"] = _c
+                _norm_u.append(_e)
+            body["urls"] = _norm_u
+
+        return body
+
+    # ---- Atomic pre-pass (2026-11-08) -------------------------------------
+    # Every run used to send all 997 contacts with every field, rewriting values
+    # google already held. Now each body is merged into google's current copy,
+    # then compared field by field: a field equal to what google holds is dropped,
+    # and a contact with nothing left is not sent at all. A no-change run makes
+    # zero write calls. Each field that does change is logged with its prior value.
+    _IGN = {"metadata", "formattedType", "displayName", "displayNameLastFirst",
+            "unstructuredName", "formattedValue", "etag"}
+
+    def _canon_val(v):
+        if isinstance(v, dict):
+            return {k: _canon_val(x) for k, x in sorted(v.items()) if k not in _IGN}
+        if isinstance(v, list):
+            return [_canon_val(x) for x in v]
+        if isinstance(v, str):
+            return v.strip()
+        return v
+
+    _chg_dir = Path("/var/log/weave-google-sync")
+    _chg_dir.mkdir(parents=True, exist_ok=True)
+    _chg_log = _chg_dir / "changes.jsonl"
+    _atomic, _unchanged, _fields_changed = [], 0, 0
+    _run_at = datetime.now(timezone.utc).isoformat()
+    for _rn, _body, _uf, _pid in all_updates:
+        _cur = existing_map.get(_rn)
+        if _cur is None:
+            continue  # no etag/current copy: cannot diff safely, skip this run
+        _body = _merge_body(_rn, _body)
+        _changes = {}
+        for _f in list(_body.keys()):
+            if _f == "etag":
+                continue
+            _old = _cur.get(_f) or []
+            if _canon_val(_body[_f]) == _canon_val(_old):
+                _body.pop(_f)
+                continue
+            # never replace something with nothing
+            if not _body[_f] and _old:
+                _body.pop(_f)
+                continue
+            _changes[_f] = {"before": _canon_val(_old), "after": _canon_val(_body[_f])}
+        if not _changes:
+            _unchanged += 1
+            continue
+        _fields_changed += len(_changes)
+        _atomic.append((_rn, _body, _uf, _pid))
+        try:
+            with open(_chg_log, "a") as _fh:
+                _fh.write(json.dumps({"t": _run_at, "rn": _rn, "weave_id": _pid,
+                                      "fields": _changes}, default=str) + "\n")
+        except Exception:
+            pass
+    all_updates = _atomic
+    _log(f"  Outbound: {len(all_updates)} contact(s) with real changes "
+         f"({_fields_changed} field(s)); {_unchanged} already match google, not sent")
+
     _by_sig = {}
     for _rn, _body, _uf, _pid in all_updates:
         _sig = tuple(sorted(k for k in _body.keys() if k != "etag"))
@@ -1305,118 +1508,7 @@ def sync_outbound(token, last_sync_at, only_person_ids=None):
                      f"{sorted(_missing)} - sending it would clear them")
                 continue
             body["etag"] = etag
-            # Google REPLACES a masked list field, and weave holds only one
-            # value per contact, so sending it alone deletes the rest. Merge.
-            _prev = existing_map.get(rn) or {}
-            def _addr_key(a):
-                # build_contact_body never sets formattedValue, so keying on it
-                # made every address comparison compare "" and the merge silently
-                # echoed google's existing address back, discarding the new one.
-                #
-                # Keying on every part instead appended a duplicate whenever the
-                # same place was SPELLED differently on the two sides. weave holds
-                # one string, "San Francisco, CA", and build_contact_body puts the
-                # second token in `region`; google's stored copy of the same place
-                # may carry it in `country`, or add countryCode:"US", or both.
-                # Measured on the live address book: 21 contacts already carry a
-                # duplicate address and one carries 38 identical copies of
-                # "Portland, OR" -- one per sync pass. So a city-only address is
-                # keyed on its city, which is all that identifies it.
-                street = str(a.get("streetAddress") or "").strip().lower()
-                postal = str(a.get("postalCode") or "").strip().lower()
-                city = str(a.get("city") or "").strip().lower()
-                if street or postal:
-                    return "|".join((street, postal, city))
-                # No street, no postal code and no city: there is no PLACE here,
-                # only a bare countryCode. Return the empty string so the caller's
-                # `_v.strip("|")` test is falsy and the entry is never appended.
-                #
-                # This used to return "city|" and claim the caller dropped it, but
-                # "city|".strip("|") == "city", which is truthy -- so every
-                # place-less address was appended after all. That is exactly where
-                # google's orphan {"countryCode": "US"} entries come from: 14 were
-                # already in the address book, and one bulk pass on 2026-08-23 added
-                # 3 more (Munaf Assaf, Steve Arnold, Abhijit Oak).
-                return "city|" + city if city else ""
-            for _f, _keyfn in (("emailAddresses", lambda e: str(e.get("value") or "").strip().lower()),
-                               ("phoneNumbers",  lambda e: str(e.get("value") or "").strip().lower()),
-                               ("addresses",     _addr_key),
-                               # company name only: keying on name+title appended a
-                               # duplicate whenever weave lacked the title google had
-                               ("organizations", lambda e: str(e.get("name") or "").strip().lower()),
-                               ("urls", lambda e: _ukey(e.get("value")) or ""),
-                               # keyed on the PERSON alone: a relationship to one
-                               # person must appear once, whatever it is labelled
-                               ("relations", _relation_person_key),
-                               ("userDefined", lambda e: str(e.get("key") or "").strip().lower())):
-                if _f not in body:
-                    continue
-                # metadata is output-only; do not echo google's source ids back
-                _have_raw = [{k: v for k, v in dict(h).items() if k != "metadata"}
-                             for h in (_prev.get(_f) or [])]
-                # Also collapse what is ALREADY there. This block used to check
-                # only whether a NEW entry duplicated an existing one, and passed
-                # google's current list through untouched -- so once duplicates
-                # existed they were immortal. One contact accumulated 39 identical
-                # 'Princeton, NJ' addresses that every pass faithfully preserved,
-                # burying the real street address the owner had typed.
-                #
-                # A contact must never hold two entries with the same value, in
-                # any field, whether or not the field permits multiple values.
-                # The FIRST occurrence wins: google's own ordering puts the
-                # primary entry first, and later copies are the accumulated noise.
-                _have, _seen_h = [], {}
-                for _h in _have_raw:
-                    _hk = _keyfn(_h)
-                    if not _hk:
-                        _have.append(_h)
-                        continue
-                    if _hk in _seen_h:
-                        # Same key twice. For relations the owner's specific
-                        # label ("Husband", "Son") must win over the generic one
-                        # this pipeline derives ("spouse", "child").
-                        if _f == "relations" and _relation_is_generic(_have[_seen_h[_hk]]) \
-                                and not _relation_is_generic(_h):
-                            _have[_seen_h[_hk]] = _h
-                        continue
-                    _seen_h[_hk] = len(_have)
-                    _have.append(_h)
-                _add = []
-                for _entry in body[_f]:
-                    _v = _keyfn(_entry)
-                    if not _v.strip("|"):
-                        continue
-                    if any(_keyfn(h) == _v for h in _have):
-                        continue
-                    # weave stores a CITY; google may already hold the full street
-                    # address for that same city. Pushing the city as its own
-                    # entry adds a less precise copy of a place already recorded,
-                    # which is how one contact accumulated 39 'Princeton, NJ'
-                    # rows around the street address the owner had typed. If an
-                    # existing address already describes that city, the city-only
-                    # entry adds nothing.
-                    if _f == "addresses" and not (_entry.get("streetAddress") or "").strip() \
-                            and not (_entry.get("postalCode") or "").strip():
-                        _c = str(_entry.get("city") or "").strip().lower()
-                        if _c and any(str(h.get("city") or "").strip().lower() == _c
-                                      for h in _have):
-                            continue
-                    _add.append(_entry)
-                body[_f] = _have + _add
-            if "urls" in body:
-                _seen_u, _norm_u = set(), []
-                for _e in body["urls"]:
-                    _c = _canon(_e.get("value"))
-                    if not _c:
-                        continue
-                    _k = _c.lower()
-                    if _k in _seen_u:
-                        continue
-                    _seen_u.add(_k)
-                    _e = dict(_e)
-                    _e["value"] = _c
-                    _norm_u.append(_e)
-                body["urls"] = _norm_u
+            # merged against google's current copy in the atomic pre-pass above
             contacts_map[rn] = body
             batch_pids[rn] = pid
 

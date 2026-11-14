@@ -300,12 +300,32 @@ run().then(r => {{
 if __name__ == "__main__":
     # Test
     import sys
-    if len(sys.argv) > 1:
-        url = sys.argv[1]
-        platform = sys.argv[2] if len(sys.argv) > 2 else 'linkedin'
-        if platform == 'linkedin':
-            print(extract_linkedin_profile_pic(url))
-        elif platform == 'reddit':
-            print(extract_reddit_profile_pic(url))
-        else:
-            print(extract_generic_profile_pic(url, platform))
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="TinyFish browser automation helper for profile picture extraction and OSINT.",
+    )
+    parser.add_argument(
+        "url",
+        nargs="?",
+        default=None,
+        help="Profile URL (or platform username) to extract a picture from.",
+    )
+    parser.add_argument(
+        "platform",
+        nargs="?",
+        default="linkedin",
+        help="Target platform: linkedin, reddit, or generic (default: linkedin).",
+    )
+    args = parser.parse_args()
+
+    if args.url is None:
+        parser.print_help()
+        sys.exit(0)
+
+    if args.platform == "linkedin":
+        print(extract_linkedin_profile_pic(args.url))
+    elif args.platform == "reddit":
+        print(extract_reddit_profile_pic(args.url))
+    else:
+        print(extract_generic_profile_pic(args.url, args.platform))
